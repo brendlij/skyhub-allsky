@@ -25,7 +25,7 @@ from app.camera.exposure import (
 logger = structlog.get_logger()
 
 DEFAULT_JPEG_QUALITY = 95
-DEFAULT_SETTLE_FRAMES = 2
+DEFAULT_SETTLE_FRAMES = 3
 ASPECT_TOLERANCE = 0.01
 DEFAULT_DAY_START_EXPOSURE_US = 5_000
 FRAME_DURATION_MARGIN_US = 1_000
@@ -119,6 +119,7 @@ class PiCamera2Camera:
         controller = self._sync_controller(settings)
         self._apply_controls(settings, controller)
         requested_controls = self._last_requested_controls or {}
+        self._settle_after_controls(requested_controls, int(settings.get("settle_frames", DEFAULT_SETTLE_FRAMES)))
 
         request = self._picamera2.capture_request()
 
@@ -609,15 +610,6 @@ class PiCamera2Camera:
 
         logger.info("picamera2.controls.applied", controls=self._loggable(controls))
 
-        # Controls take a couple of frames to land. In manual mode the saved frame
-        # has to actually carry the requested settings, so always settle. When the
-        # mean controller is driving, the frame metadata reports what was really
-        # used and it corrects itself, so settling every frame would only multiply
-        # long night exposures - but the first frame after a reconfigure still
-        # comes off the sensor with startup defaults, so settle that one too.
-        if controller is None or self._needs_settle:
-            self._settle(int(settings.get("settle_frames", DEFAULT_SETTLE_FRAMES)))
-
         self._needs_settle = False
 
     def _white_balance_controls(self, settings: dict[str, Any]) -> dict[str, Any]:
@@ -694,10 +686,49 @@ class PiCamera2Camera:
 
         return self._metering_mask
 
-    def _settle(self, frames: int) -> None:
-        for _ in range(max(0, frames)):
+    def _settle_after_controls(self, requested_controls: dict[str, Any], frames: int) -> None:
+        requested_exposure = requested_controls.get("ExposureTime")
+        requested_gain = requested_controls.get("AnalogueGain")
+        requested_frame_duration_limits = requested_controls.get("FrameDurationLimits")
+        settle_frames = max(3, frames)
+
+        for settle_index in range(1, settle_frames + 1):
             request = self._picamera2.capture_request()
-            request.release()
+
+            try:
+                metadata = dict(request.get_metadata() or {})
+            finally:
+                request.release()
+
+            actual_exposure = metadata.get("ExposureTime")
+            actual_gain = metadata.get("AnalogueGain")
+
+            logger.info(
+                "picamera2.settle.frame",
+                settle_index=settle_index,
+                requested_exposure_us=requested_exposure,
+                requested_gain=requested_gain,
+                requested_frame_duration_limits=requested_frame_duration_limits,
+                actual_exposure_us=actual_exposure,
+                actual_gain=actual_gain,
+                actual_digital_gain=metadata.get("DigitalGain"),
+                frame_duration=metadata.get("FrameDuration"),
+                ae_enable=metadata.get("AeEnable"),
+            )
+
+            exposure_matches = (
+                requested_exposure is None
+                or actual_exposure is None
+                or abs(int(actual_exposure) - int(requested_exposure)) <= 100
+            )
+            gain_matches = (
+                requested_gain is None
+                or actual_gain is None
+                or abs(float(actual_gain) - float(requested_gain)) <= 0.1
+            )
+
+            if exposure_matches and gain_matches:
+                return
 
     def _noise_reduction_mode(self, value: Any):
         if value is None:
