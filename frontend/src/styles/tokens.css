@@ -1,0 +1,190 @@
+/* Design tokens.
+ *
+ * Every colour in the app resolves through these semantic names, so a theme is a
+ * single block of overrides rather than a hunt through component styles.
+ *
+ * Dark is the default: an allsky console is read at night, next to a telescope,
+ * and a white page at 2am is genuinely unpleasant. Light is available for daytime
+ * setup work.
+ */
+
+:root {
+  /* Neutral ramp, slightly blue so it reads as night sky rather than dead grey. */
+  --grey-950: #080b12;
+  --grey-900: #0c111b;
+  --grey-850: #111826;
+  --grey-800: #161f30;
+  --grey-750: #1c273b;
+  --grey-700: #243149;
+  --grey-600: #35456180;
+  --grey-500: #64748b;
+  --grey-400: #8b9ab3;
+  --grey-300: #aebbd0;
+  --grey-200: #ccd6e5;
+  --grey-100: #e6ecf5;
+  --grey-050: #f4f7fb;
+
+  --accent-400: #38bdf8;
+  --accent-500: #0ea5e9;
+  --accent-600: #0284c7;
+
+  --success-400: #34d399;
+  --success-500: #10b981;
+  --warning-400: #fbbf24;
+  --warning-500: #f59e0b;
+  --danger-400: #f87171;
+  --danger-500: #ef4444;
+
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, "Liberation Mono", monospace;
+
+  --radius-sm: 5px;
+  --radius: 9px;
+  --radius-lg: 14px;
+  --radius-full: 999px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 22px;
+  --space-6: 30px;
+  --space-7: 42px;
+
+  --sidebar-width: 224px;
+  --sidebar-width-collapsed: 68px;
+  --topbar-height: 60px;
+
+  --transition: 140ms cubic-bezier(0.4, 0, 0.2, 1);
+
+  color-scheme: dark;
+}
+
+/* ---------- Dark (default) ---------- */
+
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: var(--grey-950);
+  --bg-subtle: var(--grey-900);
+  --surface: var(--grey-850);
+  --surface-raised: var(--grey-800);
+  --surface-hover: var(--grey-750);
+  --surface-active: var(--grey-700);
+  --surface-inset: #060910;
+
+  --border: #24314a;
+  --border-strong: #33456399;
+  --border-subtle: #1a2334;
+
+  --text: #eef3fa;
+  --text-muted: var(--grey-400);
+  --text-faint: #5f6f8a;
+  --text-inverse: var(--grey-950);
+
+  --accent: var(--accent-400);
+  --accent-strong: var(--accent-500);
+  --accent-text: var(--grey-950);
+  --accent-soft: #38bdf81f;
+  --accent-ring: #38bdf866;
+
+  --success: var(--success-400);
+  --success-soft: #34d3991f;
+  --warning: var(--warning-400);
+  --warning-soft: #fbbf241f;
+  --danger: var(--danger-400);
+  --danger-soft: #f871711f;
+
+  --shadow-sm: 0 1px 2px #00000059;
+  --shadow: 0 4px 16px #00000066;
+  --shadow-lg: 0 18px 50px #000000a6;
+
+  --image-backdrop: #04070d;
+}
+
+/* ---------- Light ---------- */
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: var(--grey-050);
+  --bg-subtle: #eaeff7;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --surface-hover: var(--grey-050);
+  --surface-active: var(--grey-100);
+  --surface-inset: var(--grey-050);
+
+  --border: #d3dceb;
+  --border-strong: #b6c3d8;
+  --border-subtle: #e4eaf3;
+
+  --text: #101827;
+  --text-muted: #55637a;
+  --text-faint: #8a97ad;
+  --text-inverse: #ffffff;
+
+  --accent: var(--accent-600);
+  --accent-strong: var(--accent-600);
+  --accent-text: #ffffff;
+  --accent-soft: #0284c714;
+  --accent-ring: #0284c759;
+
+  --success: #059669;
+  --success-soft: #05966914;
+  --warning: #b45309;
+  --warning-soft: #b4530914;
+  --danger: #dc2626;
+  --danger-soft: #dc262614;
+
+  --shadow-sm: 0 1px 2px #0f172a14;
+  --shadow: 0 4px 14px #0f172a1f;
+  --shadow-lg: 0 18px 44px #0f172a2e;
+
+  --image-backdrop: #0c111b;
+}
+
+/* Follow the OS when the user has not chosen explicitly. data-theme always wins,
+ * in both directions, so the toggle is never fighting the media query. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    color-scheme: light;
+
+    --bg: var(--grey-050);
+    --bg-subtle: #eaeff7;
+    --surface: #ffffff;
+    --surface-raised: #ffffff;
+    --surface-hover: var(--grey-050);
+    --surface-active: var(--grey-100);
+    --surface-inset: var(--grey-050);
+
+    --border: #d3dceb;
+    --border-strong: #b6c3d8;
+    --border-subtle: #e4eaf3;
+
+    --text: #101827;
+    --text-muted: #55637a;
+    --text-faint: #8a97ad;
+    --text-inverse: #ffffff;
+
+    --accent: var(--accent-600);
+    --accent-strong: var(--accent-600);
+    --accent-text: #ffffff;
+    --accent-soft: #0284c714;
+    --accent-ring: #0284c759;
+
+    --success: #059669;
+    --success-soft: #05966914;
+    --warning: #b45309;
+    --warning-soft: #b4530914;
+    --danger: #dc2626;
+    --danger-soft: #dc262614;
+
+    --shadow-sm: 0 1px 2px #0f172a14;
+    --shadow: 0 4px 14px #0f172a1f;
+    --shadow-lg: 0 18px 44px #0f172a2e;
+
+    --image-backdrop: #0c111b;
+  }
+}

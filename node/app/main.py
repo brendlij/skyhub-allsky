@@ -27,8 +27,11 @@ heater: HeaterController | None = None
 active_device_config: dict[str, Any] = {}
 active_capture_settings: dict[str, Any] = {
     "interval_seconds": 60,
-    "width": 1920,
-    "height": 1080,
+    # None means full sensor resolution; the server overrides these when the user
+    # pins an explicit size.
+    "full_resolution": True,
+    "width": None,
+    "height": None,
     "format": "jpg",
     "period": "night",
     "auto_exposure": False,

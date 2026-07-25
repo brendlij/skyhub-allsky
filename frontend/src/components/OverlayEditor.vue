@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { confirmAction } from "../composables/useConfirm";
 
 const props = defineProps({
   overlays: {
@@ -7,6 +8,10 @@ const props = defineProps({
     required: true
   },
   imageUrl: {
+    type: String,
+    default: null
+  },
+  nodeId: {
     type: String,
     default: null
   }
@@ -27,42 +32,112 @@ const previewRect = ref({
 let resizeObserver = null;
 
 const enabledEntities = computed(() => props.overlays.entities || []);
-const variables = [
-  { token: "$capture.datetime", label: "Date time" },
-  { token: "$capture.date", label: "Date" },
-  { token: "$capture.time", label: "Time" },
-  { token: "$capture.period", label: "Period" },
-  { token: "$node.id", label: "Node" },
-  { token: "$bme280.temperature", label: "Temp" },
-  { token: "$bme280.humidity", label: "Humidity" },
-  { token: "$bme280.pressure", label: "Pressure" },
-  { token: "$bme280.dew_point", label: "Dew point" },
-  { token: "$heater.state", label: "Heater" },
-  { token: "$picamera2.state", label: "Camera" }
-];
 
-const previewValues = {
-  "$capture.datetime": "2026-06-21 23:42:10",
-  "$capture.date": "2026-06-21",
-  "$capture.time": "23:42:10",
-  "$capture.period": "NIGHT",
-  "$node.id": "pi5-hqcam",
-  "$node.node_id": "pi5-hqcam",
-  "$bme280.temperature": "12.4",
-  "$bme280.temperature_c": "12.4",
-  "$bme280.humidity": "78",
-  "$bme280.humidity_percent": "78",
-  "$bme280.pressure": "1008",
-  "$bme280.pressure_hpa": "1008",
-  "$bme280.dew_point": "8.7",
-  "$bme280.dew_point_c": "8.7",
-  "$heater.state": "off",
-  "$heater.actual": "off",
-  "$heater.desired": "off",
-  "$heater.gpio": "23",
-  "$heater.driver": "gpiozero",
-  "$picamera2.state": "capturing"
-};
+// Fetched from the server so the picker always matches what actually renders,
+// rather than a second hardcoded list that drifts.
+const variables = ref([]);
+const presets = ref([]);
+const hasLiveValues = ref(false);
+const variableFilter = ref("");
+const insertWithLabels = ref(true);
+const textareaRefs = new Map();
+
+// Real values from the node's last capture when available, illustrative samples
+// otherwise. Either way this is what the stage preview renders.
+const previewValues = computed(() => Object.fromEntries(
+  variables.value.map((variable) => [variable.token, variable.value])
+));
+
+const knownTokens = computed(() => new Set(variables.value.map((variable) => variable.token)));
+
+const LEGACY_TOKENS = new Set([
+  "$node.node_id", "$bme280.temperature_c", "$bme280.humidity_percent",
+  "$bme280.pressure_hpa", "$bme280.dew_point_c", "$heater.actual"
+]);
+
+function entityWarnings(entity) {
+  if (!knownTokens.value.size) return [];
+
+  const matches = String(entity.text || "").match(/\$[A-Za-z][A-Za-z0-9_.]*/g) || [];
+
+  return [...new Set(matches.filter(
+    (token) => !knownTokens.value.has(token) && !LEGACY_TOKENS.has(token)
+  ))];
+}
+
+const allWarnings = computed(() => enabledEntities.value.flatMap(
+  (entity) => entityWarnings(entity).map((token) => ({ id: entity.id, token }))
+));
+
+const filteredGroups = computed(() => {
+  const needle = variableFilter.value.trim().toLowerCase();
+  const groups = new Map();
+
+  for (const variable of variables.value) {
+    if (needle && !variable.token.toLowerCase().includes(needle)
+      && !variable.label.toLowerCase().includes(needle)) {
+      continue;
+    }
+
+    if (!groups.has(variable.group)) groups.set(variable.group, []);
+    groups.get(variable.group).push(variable);
+  }
+
+  return [...groups.entries()].map(([group, items]) => ({ group, items }));
+});
+
+async function loadVariables() {
+  try {
+    const query = props.nodeId ? `?node_id=${encodeURIComponent(props.nodeId)}` : "";
+    const response = await fetch(`/api/overlays/variables${query}`);
+    if (!response.ok) return;
+
+    const data = await response.json();
+    variables.value = data.variables;
+    presets.value = data.presets || [];
+    hasLiveValues.value = Boolean(data.has_live_values);
+  } catch {
+    // Picker degrades to typing tokens by hand; rendering is unaffected.
+  }
+}
+
+async function applyPreset(preset) {
+  if (!preset) return;
+
+  // A preset replaces every entity, so hand-tuned work would vanish on a stray
+  // click without this.
+  if (props.overlays.entities.length) {
+    const confirmed = await confirmAction({
+      title: `Replace ${props.overlays.entities.length} overlay${props.overlays.entities.length === 1 ? "" : "s"}?`,
+      message: `"${preset.name}" replaces everything currently on the frame. This is not saved until you press Save.`,
+      confirmLabel: "Replace",
+      tone: "danger"
+    });
+
+    if (!confirmed) return;
+  }
+
+  props.overlays.entities.splice(
+    0,
+    props.overlays.entities.length,
+    ...preset.entities.map((entity, index) => ({
+      id: `${preset.id}-${index}-${Date.now()}`,
+      type: "text",
+      label: "Overlay",
+      enabled: true,
+      color: "#ffffff",
+      background: "#000000",
+      background_opacity: 0.35,
+      ...entity
+    }))
+  );
+
+  selectedEntityId.value = props.overlays.entities[0]?.id || null;
+}
+
+loadVariables();
+
+watch(() => props.nodeId, loadVariables);
 
 function legacyTemplate(entity) {
   if (entity.text) return entity.text;
@@ -75,7 +150,10 @@ function legacyTemplate(entity) {
 }
 
 function previewText(entity) {
-  return legacyTemplate(entity).replace(/\$[A-Za-z][A-Za-z0-9_.]*/g, (token) => previewValues[token] ?? "");
+  return legacyTemplate(entity).replace(
+    /\$[A-Za-z][A-Za-z0-9_.]*/g,
+    (token) => previewValues.value[token] ?? ""
+  );
 }
 
 function entityStyle(entity) {
@@ -243,7 +321,15 @@ function selectedEntity() {
   return props.overlays.entities.find((entity) => entity.id === selectedEntityId.value) || props.overlays.entities[0];
 }
 
-function insertVariable(token) {
+function registerTextarea(entityId, element) {
+  if (element) {
+    textareaRefs.set(entityId, element);
+  } else {
+    textareaRefs.delete(entityId);
+  }
+}
+
+function insertVariable(variable) {
   let entity = selectedEntity();
 
   if (!entity) {
@@ -254,7 +340,30 @@ function insertVariable(token) {
   if (!entity) return;
 
   selectEntity(entity);
-  entity.text = [entity.text || "", token].filter(Boolean).join(" ");
+
+  const fragment = insertWithLabels.value ? variable.snippet : variable.token;
+  const textarea = textareaRefs.get(entity.id);
+  const current = entity.text || "";
+
+  // Insert at the caret rather than appending, so a variable can go before or
+  // inside text that is already written.
+  if (!textarea || textarea.selectionStart === null) {
+    entity.text = [current, fragment].filter(Boolean).join(" ");
+    return;
+  }
+
+  const start = textarea.selectionStart;
+  const end = textarea.selectionEnd;
+  const needsLeadingSpace = start > 0 && !/\s$/.test(current.slice(0, start));
+  const insertion = (needsLeadingSpace ? " " : "") + fragment;
+
+  entity.text = current.slice(0, start) + insertion + current.slice(end);
+
+  const caret = start + insertion.length;
+  requestAnimationFrame(() => {
+    textarea.focus();
+    textarea.setSelectionRange(caret, caret);
+  });
 }
 
 function normalizeEntities() {
@@ -295,98 +404,204 @@ watch(() => props.overlays.entities, normalizeEntities, { immediate: true });
 </script>
 
 <template>
-  <div class="overlay-editor">
-    <div class="overlay-toolbar">
-      <label class="check">
-        <input v-model="overlays.enabled" type="checkbox" />
-        Enable overlays on saved captures
-      </label>
-      <button type="button" @click="addTextEntity">Add Overlay</button>
-    </div>
+  <div class="overlay-layout">
+    <section class="panel">
+      <div class="panel-header">
+        <h2>
+          Preview
+          <span v-if="!imageUrl" class="panel-title-note">no capture yet</span>
+        </h2>
+        <span class="badge" :class="hasLiveValues ? 'success' : ''">
+          {{ hasLiveValues ? "live values" : "sample values" }}
+        </span>
+      </div>
 
-    <div class="overlay-variables">
-      <button
-        v-for="variable in variables"
-        :key="variable.token"
-        type="button"
-        @click="insertVariable(variable.token)"
-      >
-        {{ variable.label }}
-      </button>
-    </div>
-
-    <div ref="stage" class="overlay-stage">
-      <img v-if="imageUrl" ref="previewImage" :src="imageUrl" alt="" @load="updatePreviewRect" />
-      <div v-else class="overlay-placeholder">Preview uses the latest capture when one exists.</div>
-      <button
-        v-for="entity in enabledEntities"
-        v-show="entity.enabled"
-        :key="entity.id"
-        class="overlay-entity"
-        type="button"
-        :style="entityStyle(entity)"
-        @pointerdown.prevent="selectEntity(entity); startDrag(entity, $event)"
-      >
-        {{ previewText(entity) }}
-      </button>
-    </div>
-
-    <div class="overlay-list">
-      <section
-        v-for="entity in overlays.entities"
-        :key="entity.id"
-        class="overlay-row"
-        :class="{ active: entity.id === selectedEntityId }"
-        @focusin="selectEntity(entity)"
-        @click="selectEntity(entity)"
-      >
-        <div class="overlay-row-head">
-          <label class="check">
-            <input v-model="entity.enabled" type="checkbox" />
-            {{ entity.label || entity.type }}
-          </label>
-          <button type="button" @click="removeEntity(entity.id)">Remove</button>
+      <div class="panel-body">
+        <div ref="stage" class="overlay-stage">
+          <img v-if="imageUrl" ref="previewImage" :src="imageUrl" alt="" @load="updatePreviewRect" />
+          <div v-else class="overlay-placeholder">
+            The preview uses this node's most recent capture once one exists.
+          </div>
+          <button
+            v-for="entity in enabledEntities"
+            v-show="entity.enabled"
+            :key="entity.id"
+            class="overlay-entity"
+            :class="{ selected: entity.id === selectedEntityId }"
+            type="button"
+            :style="entityStyle(entity)"
+            :aria-label="`Move ${entity.label || 'overlay'}`"
+            @pointerdown.prevent="selectEntity(entity); startDrag(entity, $event)"
+          >
+            {{ previewText(entity) }}
+          </button>
         </div>
-        <div class="overlay-grid">
-          <label>
-            Name
-            <input v-model="entity.label" @focus="selectEntity(entity)" />
+        <p class="field-hint">Drag any label to reposition it. Values shown are what will render.</p>
+      </div>
+    </section>
+
+    <div class="stack">
+      <section class="panel">
+        <div class="panel-header">
+          <h2>Overlays</h2>
+          <label class="check">
+            <input v-model="overlays.enabled" type="checkbox" />
+            Enabled
           </label>
-          <label>
-            Anchor
-            <select v-model="entity.anchor">
-              <option value="top-left">Top left</option>
-              <option value="top-right">Top right</option>
-              <option value="bottom-left">Bottom left</option>
-              <option value="bottom-right">Bottom right</option>
-              <option value="center">Center</option>
+        </div>
+
+        <div class="panel-body">
+          <div class="row wrap">
+            <select
+              v-if="presets.length"
+              class="grow"
+              @change="applyPreset(presets[$event.target.selectedIndex - 1]); $event.target.selectedIndex = 0"
+            >
+              <option value="">Start from a preset…</option>
+              <option v-for="preset in presets" :key="preset.id" :title="preset.description">
+                {{ preset.name }}
+              </option>
             </select>
+            <button type="button" class="primary" @click="addTextEntity">Add label</button>
+          </div>
+
+          <p v-if="allWarnings.length" class="callout warning">
+            <span>
+              Unknown variable{{ allWarnings.length > 1 ? "s" : "" }} render as empty text:
+              <code v-for="warning in allWarnings" :key="warning.id + warning.token">{{ warning.token }}</code>
+            </span>
+          </p>
+
+          <div v-if="!overlays.entities.length" class="empty-state">
+            <span class="empty-icon" aria-hidden="true">◫</span>
+            <strong>No labels yet</strong>
+            <p>Pick a preset for a ready-made four-corner layout, or add a label and build it up.</p>
+          </div>
+
+          <div v-else class="entity-list">
+            <article
+              v-for="entity in overlays.entities"
+              :key="entity.id"
+              class="entity-row"
+              :class="{ selected: entity.id === selectedEntityId }"
+              @focusin="selectEntity(entity)"
+              @click="selectEntity(entity)"
+            >
+              <div class="entity-row-head">
+                <input v-model="entity.enabled" type="checkbox" :aria-label="`Show ${entity.label}`" />
+                <input
+                  v-model="entity.label"
+                  class="grow"
+                  aria-label="Label name"
+                  @focus="selectEntity(entity)"
+                />
+                <button
+                  type="button"
+                  class="icon ghost"
+                  :aria-label="`Remove ${entity.label}`"
+                  title="Remove"
+                  @click="removeEntity(entity.id)"
+                >
+                  ×
+                </button>
+              </div>
+
+              <!-- Only the selected label expands. With three or four labels the
+                   full form on every one pushed the variable picker off screen. -->
+              <div v-if="entity.id !== selectedEntityId" class="entity-preview">
+                {{ previewText(entity) || "(renders empty)" }}
+              </div>
+
+              <template v-else>
+                <label class="field">
+                  <span>Template</span>
+                  <textarea
+                    :ref="(element) => registerTextarea(entity.id, element)"
+                    v-model="entity.text"
+                    rows="2"
+                    :class="{ invalid: entityWarnings(entity).length }"
+                    placeholder="$capture.datetime"
+                    @focus="selectEntity(entity)"
+                  />
+                </label>
+                <div class="entity-preview">{{ previewText(entity) || "(renders empty)" }}</div>
+
+                <div class="field-grid">
+                <label class="field">
+                  <span>Anchor</span>
+                  <select v-model="entity.anchor">
+                    <option value="top-left">Top left</option>
+                    <option value="top-right">Top right</option>
+                    <option value="bottom-left">Bottom left</option>
+                    <option value="bottom-right">Bottom right</option>
+                    <option value="center">Centre</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Font size</span>
+                  <input v-model.number="entity.font_size" type="number" min="8" max="160" />
+                </label>
+                <label class="field">
+                  <span>Text</span>
+                  <input v-model="entity.color" type="color" />
+                </label>
+                <label class="field">
+                  <span>Background</span>
+                  <input v-model="entity.background" type="color" />
+                </label>
+                <label class="field">
+                  <span>Opacity <em class="field-value">{{ Number(entity.background_opacity ?? 0.35).toFixed(2) }}</em></span>
+                  <input v-model.number="entity.background_opacity" type="range" min="0" max="1" step="0.05" />
+                </label>
+                </div>
+              </template>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>
+            Variables
+            <span class="panel-title-note">{{ variables.length }} available</span>
+          </h2>
+          <label class="check">
+            <input v-model="insertWithLabels" type="checkbox" />
+            With labels
           </label>
-          <label class="overlay-template">
-            Template
-            <textarea
-              v-model="entity.text"
-              rows="2"
-              placeholder="$capture.datetime  $bme280.temperature C"
-              @focus="selectEntity(entity)"
-            />
-          </label>
-          <label>
-            Size
-            <input v-model.number="entity.font_size" type="number" min="8" max="160" />
-          </label>
-          <label>
-            Text color
-            <input v-model="entity.color" type="color" />
-          </label>
-          <label>
-            Background
-            <input v-model="entity.background" type="color" />
-          </label>
-          <label>
-            Background opacity
-            <input v-model.number="entity.background_opacity" type="number" min="0" max="1" step="0.05" />
-          </label>
+        </div>
+
+        <div class="panel-body">
+          <div class="overlay-variable-picker">
+            <div class="overlay-variable-search">
+              <input
+                v-model="variableFilter"
+                type="search"
+                placeholder="Filter — exposure, gain, moon…"
+                aria-label="Filter variables"
+              />
+            </div>
+
+            <div v-for="entry in filteredGroups" :key="entry.group" class="overlay-variable-group">
+              <h4>{{ entry.group }}</h4>
+              <div class="overlay-variables">
+                <button
+                  v-for="variable in entry.items"
+                  :key="variable.token"
+                  type="button"
+                  :title="`${variable.snippet}  →  ${variable.value}`"
+                  @click="insertVariable(variable)"
+                >
+                  {{ variable.label }}
+                  <em>{{ variable.value }}</em>
+                </button>
+              </div>
+            </div>
+
+            <p v-if="!filteredGroups.length" class="muted">No variables match that filter.</p>
+          </div>
+          <p class="field-hint">Clicking inserts at the cursor in the selected label's template.</p>
         </div>
       </section>
     </div>

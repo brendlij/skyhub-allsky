@@ -1,265 +1,318 @@
 <script setup>
+import { computed, ref, watch } from "vue";
+import ColourControls from "../components/ColourControls.vue";
+import EmptyState from "../components/ui/EmptyState.vue";
 import { formatBytes } from "../api/skyhub";
 import { useSkyHub } from "../composables/useSkyHub";
 
 const {
+  busy,
   deviceSettings,
-  heaterState,
-  message,
   saveDeviceSettings,
   saveSettings,
   saveStorageSettings,
-  setHeaterEnabled,
   settings,
-  storageStats,
-  storageSettings
+  storageSettings,
+  storageStats
 } = useSkyHub();
+
+const activePeriod = ref("night");
+
+/* Dirty tracking: the old form had a Save button with no indication of unsaved
+ * work, so navigating away silently discarded edits. */
+const baseline = ref(null);
+const storageBaseline = ref(null);
+const deviceBaseline = ref(null);
+
+const snapshot = (value) => (value ? JSON.stringify(value) : null);
+
+watch(settings, (value) => { baseline.value = snapshot(value); }, { immediate: true, deep: false });
+watch(storageSettings, (value) => { storageBaseline.value = snapshot(value); }, { immediate: true, deep: false });
+watch(deviceSettings, (value) => { deviceBaseline.value = snapshot(value); }, { immediate: true, deep: false });
+
+const cameraDirty = computed(() => Boolean(settings.value) && snapshot(settings.value) !== baseline.value);
+const storageDirty = computed(() => Boolean(storageSettings.value) && snapshot(storageSettings.value) !== storageBaseline.value);
+const deviceDirty = computed(() => Boolean(deviceSettings.value) && snapshot(deviceSettings.value) !== deviceBaseline.value);
+
+const storageUsedRatio = computed(() => {
+  const max = storageSettings.value?.max_storage_gb;
+  const used = storageStats.value?.capture_storage_bytes;
+
+  if (!max || !used) return null;
+  return Math.min(1, used / (max * 1024 ** 3));
+});
+
+const meterTone = computed(() => {
+  const ratio = storageUsedRatio.value;
+  if (ratio === null) return "";
+  if (ratio > 0.9) return "danger";
+  if (ratio > 0.7) return "warning";
+  return "";
+});
+
+const STORAGE_KEYS = [
+  ["capture_storage_bytes", "Capture total"],
+  ["captures_bytes", "Rendered"],
+  ["originals_bytes", "Originals"],
+  ["thumbnails_bytes", "Thumbnails"],
+  ["database_bytes", "Database"],
+  ["disk_free_bytes", "Disk free"]
+];
 </script>
 
 <template>
-  <main class="workspace">
-    <section class="page-heading">
-      <div>
+  <div class="stack-lg">
+    <div class="page-head">
+      <div class="page-head-text">
         <h1>Settings</h1>
+        <p>Camera, colour, hardware and storage for the selected node</p>
       </div>
-    </section>
+    </div>
 
-    <div class="settings-layout settings-layout-compact">
+    <div v-if="!settings" class="panel">
+      <EmptyState icon="⚙" title="No node selected" message="Pick a node in the top bar to edit its settings." />
+    </div>
+
+    <template v-else>
       <section class="panel">
-        <h2>Node Camera</h2>
-        <div class="content" v-if="settings">
-          <div class="settings-grid">
-            <label>
-              Interval seconds
+        <div class="panel-header">
+          <h2>
+            Camera
+            <span v-if="cameraDirty" class="badge warning">unsaved</span>
+          </h2>
+        </div>
+
+        <div class="panel-body">
+          <div class="field-grid">
+            <label class="field">
+              <span>Interval <em class="field-unit">seconds</em></span>
               <input v-model.number="settings.interval_seconds" type="number" min="1" />
             </label>
-            <label>
-              Width
-              <input v-model.number="settings.width" type="number" min="1" />
-            </label>
-            <label>
-              Height
-              <input v-model.number="settings.height" type="number" min="1" />
-            </label>
-            <label>
-              Format
-              <input v-model="settings.format" />
+            <label class="field">
+              <span>Format</span>
+              <select v-model="settings.format">
+                <option value="jpg">jpg</option>
+                <option value="png">png</option>
+              </select>
             </label>
           </div>
 
-          <div class="settings-section">
-            <h3>Day</h3>
-            <div class="settings-grid">
-              <label class="check">
-                <input v-model="settings.day_auto_exposure" type="checkbox" />
-                Auto exposure
+          <div class="section">
+            <div class="section-title">Resolution</div>
+            <label class="check">
+              <input v-model="settings.full_resolution" type="checkbox" />
+              Full sensor resolution
+            </label>
+            <p class="field-hint">
+              {{ settings.full_resolution
+                ? "Captures at the sensor's native size — full field of view, largest files."
+                : "Captures at the size below. The node raises the height if the ratio would crop the sensor." }}
+            </p>
+            <div class="field-grid">
+              <label class="field">
+                <span>Width</span>
+                <input v-model.number="settings.width" type="number" min="1" :disabled="settings.full_resolution" />
               </label>
-              <label>
-                Exposure ms
-                <input v-model.number="settings.day_exposure_ms" type="number" min="1" />
-              </label>
-              <label class="check">
-                <input v-model="settings.day_auto_gain" type="checkbox" />
-                Auto gain
-              </label>
-              <label>
-                Gain
-                <input v-model.number="settings.day_gain" type="number" step="0.1" min="0" />
+              <label class="field">
+                <span>Height</span>
+                <input v-model.number="settings.height" type="number" min="1" :disabled="settings.full_resolution" />
               </label>
             </div>
           </div>
 
-          <div class="settings-section">
-            <h3>Night</h3>
-            <div class="settings-grid">
-              <label class="check">
-                <input v-model="settings.night_auto_exposure" type="checkbox" />
-                Auto exposure
-              </label>
-              <label>
-                Exposure ms
-                <input v-model.number="settings.night_exposure_ms" type="number" min="1" />
-              </label>
-              <label class="check">
-                <input v-model="settings.night_auto_gain" type="checkbox" />
-                Auto gain
-              </label>
-              <label>
-                Gain
-                <input v-model.number="settings.night_gain" type="number" step="0.1" min="0" />
-              </label>
+          <div class="section">
+            <div class="section-title">Exposure &amp; colour</div>
+            <div class="segmented">
+              <button type="button" :class="{ active: activePeriod === 'night' }" @click="activePeriod = 'night'">
+                Night
+              </button>
+              <button type="button" :class="{ active: activePeriod === 'day' }" @click="activePeriod = 'day'">
+                Day
+              </button>
+            </div>
+
+            <div class="period-card">
+              <div class="field-grid">
+                <label class="check">
+                  <input v-model="settings[`${activePeriod}_auto_exposure`]" type="checkbox" />
+                  Auto exposure
+                </label>
+                <label class="field">
+                  <span>Exposure <em class="field-unit">ms</em></span>
+                  <input
+                    v-model.number="settings[`${activePeriod}_exposure_ms`]"
+                    type="number"
+                    min="1"
+                    :disabled="settings[`${activePeriod}_auto_exposure`]"
+                  />
+                </label>
+                <label class="check">
+                  <input v-model="settings[`${activePeriod}_auto_gain`]" type="checkbox" />
+                  Auto gain
+                </label>
+                <label class="field">
+                  <span>Gain</span>
+                  <input
+                    v-model.number="settings[`${activePeriod}_gain`]"
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    :disabled="settings[`${activePeriod}_auto_gain`]"
+                  />
+                </label>
+              </div>
+
+              <p
+                v-if="settings[`${activePeriod}_auto_exposure`] || settings[`${activePeriod}_auto_gain`]"
+                class="callout warning"
+              >
+                Auto mode uses the mean-target controller. Its exposure and gain ceilings
+                are not configurable here yet, so on a dark night it can run to the sensor
+                maximum.
+              </p>
+
+              <ColourControls :settings="settings" :period="activePeriod" />
             </div>
           </div>
-
-          <button type="button" class="primary save" @click="saveSettings">
-            Save Node Settings
-          </button>
-          <div class="message">{{ message }}</div>
         </div>
-        <div class="content muted" v-else>No node selected</div>
-      </section>
 
-      <section class="panel">
-        <h2>Device Hardware</h2>
-        <div class="content" v-if="deviceSettings">
-          <div class="settings-section">
-            <h3>Heater</h3>
-            <div class="settings-grid">
-              <label>
-                Driver
-                <select v-model="deviceSettings.devices.heater.driver">
-                  <option value="gpiozero">gpiozero</option>
-                  <option value="mock">mock</option>
-                  <option value="disabled">disabled</option>
-                </select>
-              </label>
-              <label>
-                GPIO pin
-                <input v-model.number="deviceSettings.devices.heater.gpio_pin" type="number" min="0" />
-              </label>
-              <label class="check">
-                <input v-model="deviceSettings.devices.heater.active_high" type="checkbox" />
-                Active high
-              </label>
-              <label>
-                Mode
-                <select v-model="deviceSettings.devices.heater.mode">
-                  <option value="manual">manual</option>
-                  <option value="auto" disabled>auto later</option>
-                </select>
-              </label>
-            </div>
-          </div>
-
-          <div class="settings-section">
-            <h3>Environment Sensor</h3>
-            <div class="settings-grid">
-              <label>
-                Driver
-                <select v-model="deviceSettings.devices.environment.driver">
-                  <option value="bme280">bme280</option>
-                  <option value="mock">mock</option>
-                  <option value="disabled">disabled</option>
-                </select>
-              </label>
-              <label>
-                Interval seconds
-                <input v-model.number="deviceSettings.devices.environment.interval_seconds" type="number" min="1" />
-              </label>
-              <label>
-                I2C bus
-                <input v-model.number="deviceSettings.devices.environment.bme280_i2c_bus" type="number" min="0" />
-              </label>
-              <label>
-                I2C address
-                <input v-model="deviceSettings.devices.environment.bme280_i2c_address" />
-              </label>
-            </div>
-          </div>
-
-          <button type="button" class="primary save" @click="saveDeviceSettings">
-            Save Device Hardware
+        <div class="panel-footer">
+          <span v-if="cameraDirty" class="muted grow">Unsaved changes</span>
+          <button type="button" class="primary" :disabled="!cameraDirty || busy.settings" @click="saveSettings">
+            {{ busy.settings ? "Saving…" : "Save camera settings" }}
           </button>
         </div>
-        <div class="content muted" v-else>No node selected</div>
       </section>
 
-      <section class="panel">
-        <h2>Manual Heater</h2>
-        <div class="content server-placeholder">
-          <div v-if="heaterState" class="storage-grid">
-            <div>
-              <span>Desired</span>
-              <strong>{{ heaterState.desired_enabled ? "On" : "Off" }}</strong>
+      <div class="settings-grid">
+        <section v-if="deviceSettings" class="panel">
+          <div class="panel-header">
+            <h2>
+              Hardware
+              <span v-if="deviceDirty" class="badge warning">unsaved</span>
+            </h2>
+          </div>
+          <div class="panel-body">
+            <div class="section">
+              <div class="section-title">Heater</div>
+              <div class="field-grid">
+                <label class="field">
+                  <span>Driver</span>
+                  <select v-model="deviceSettings.devices.heater.driver">
+                    <option value="gpiozero">gpiozero</option>
+                    <option value="mock">mock</option>
+                    <option value="disabled">disabled</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>GPIO pin</span>
+                  <input v-model.number="deviceSettings.devices.heater.gpio_pin" type="number" min="0" />
+                </label>
+                <label class="check">
+                  <input v-model="deviceSettings.devices.heater.active_high" type="checkbox" />
+                  Active high
+                </label>
+              </div>
             </div>
-            <div>
-              <span>Actual</span>
-              <strong>{{ heaterState.actual_enabled ? "On" : "Off" }}</strong>
-            </div>
-            <div>
-              <span>Driver</span>
-              <strong>{{ heaterState.driver || "-" }}</strong>
-            </div>
-            <div>
-              <span>GPIO</span>
-              <strong>{{ heaterState.gpio_pin || "-" }}</strong>
+
+            <div class="section">
+              <div class="section-title">Environment sensor</div>
+              <div class="field-grid">
+                <label class="field">
+                  <span>Driver</span>
+                  <select v-model="deviceSettings.devices.environment.driver">
+                    <option value="bme280">bme280</option>
+                    <option value="mock">mock</option>
+                    <option value="disabled">disabled</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Interval <em class="field-unit">seconds</em></span>
+                  <input v-model.number="deviceSettings.devices.environment.interval_seconds" type="number" min="1" />
+                </label>
+                <label class="field">
+                  <span>I2C bus</span>
+                  <input v-model.number="deviceSettings.devices.environment.bme280_i2c_bus" type="number" min="0" />
+                </label>
+                <label class="field">
+                  <span>I2C address</span>
+                  <input v-model="deviceSettings.devices.environment.bme280_i2c_address" />
+                </label>
+              </div>
             </div>
           </div>
-          <div class="actions">
-            <button type="button" class="primary" :disabled="!heaterState" @click="setHeaterEnabled(true)">
-              Turn on
-            </button>
-            <button type="button" :disabled="!heaterState" @click="setHeaterEnabled(false)">
-              Turn off
+          <div class="panel-footer">
+            <button type="button" class="primary" :disabled="!deviceDirty || busy.devices" @click="saveDeviceSettings">
+              {{ busy.devices ? "Saving…" : "Save hardware" }}
             </button>
           </div>
-        </div>
-      </section>
+        </section>
 
-      <section class="panel">
-        <h2>Storage Policy</h2>
-        <div class="content" v-if="storageSettings">
-          <div class="settings-grid">
-            <label class="check">
-              <input v-model="storageSettings.night_capture_enabled" type="checkbox" />
-              Save night captures
-            </label>
-            <label class="check">
-              <input v-model="storageSettings.day_capture_enabled" type="checkbox" />
-              Save day captures
-            </label>
-            <label>
-              Days to keep
-              <input v-model.number="storageSettings.retention_days" type="number" min="1" placeholder="Unlimited" />
-            </label>
-            <label>
-              Max capture storage GB
-              <input v-model.number="storageSettings.max_storage_gb" type="number" min="0.1" step="0.1" placeholder="Unlimited" />
-            </label>
+        <section v-if="storageSettings" class="panel">
+          <div class="panel-header">
+            <h2>
+              Storage
+              <span v-if="storageDirty" class="badge warning">unsaved</span>
+            </h2>
           </div>
-          <button type="button" class="primary save" @click="saveStorageSettings">
-            Save Storage Policy
-          </button>
-        </div>
-        <div class="content muted" v-else>Storage policy not loaded</div>
-      </section>
+          <div class="panel-body">
+            <div class="field-grid">
+              <label class="check">
+                <input v-model="storageSettings.night_capture_enabled" type="checkbox" />
+                Keep night captures
+              </label>
+              <label class="check">
+                <input v-model="storageSettings.day_capture_enabled" type="checkbox" />
+                Keep day captures
+              </label>
+              <label class="field">
+                <span>Retention <em class="field-unit">days</em></span>
+                <input v-model.number="storageSettings.retention_days" type="number" min="1" placeholder="Unlimited" />
+              </label>
+              <label class="field">
+                <span>Max storage <em class="field-unit">GB</em></span>
+                <input
+                  v-model.number="storageSettings.max_storage_gb"
+                  type="number"
+                  min="0.1"
+                  step="0.1"
+                  placeholder="Unlimited"
+                />
+              </label>
+            </div>
 
-      <section class="panel">
-        <h2>Storage Usage</h2>
-        <div class="content server-placeholder">
-          <div v-if="storageStats" class="storage-grid">
-            <div>
-              <span>Capture storage</span>
-              <strong>{{ formatBytes(storageStats.capture_storage_bytes) }}</strong>
+            <p
+              v-if="!storageSettings.night_capture_enabled || !storageSettings.day_capture_enabled"
+              class="callout warning"
+            >
+              Uploads for a disabled period are discarded by the server and deleted from
+              the node — those frames are not kept anywhere.
+            </p>
+
+            <div v-if="storageUsedRatio !== null" class="section">
+              <div class="row-between">
+                <span class="muted">Against the {{ storageSettings.max_storage_gb }} GB cap</span>
+                <span class="numeric">{{ Math.round(storageUsedRatio * 100) }}%</span>
+              </div>
+              <div class="meter">
+                <div class="meter-fill" :class="meterTone" :style="{ width: `${storageUsedRatio * 100}%` }" />
+              </div>
             </div>
-            <div>
-              <span>Captures</span>
-              <strong>{{ formatBytes(storageStats.captures_bytes) }}</strong>
-            </div>
-            <div>
-              <span>Originals</span>
-              <strong>{{ formatBytes(storageStats.originals_bytes) }}</strong>
-            </div>
-            <div>
-              <span>Database</span>
-              <strong>{{ formatBytes(storageStats.database_bytes) }}</strong>
-            </div>
-            <div>
-              <span>Thumbnails</span>
-              <strong>{{ formatBytes(storageStats.thumbnails_bytes) }}</strong>
-            </div>
-            <div>
-              <span>Data total</span>
-              <strong>{{ formatBytes(storageStats.data_bytes) }}</strong>
-            </div>
-            <div>
-              <span>Disk free</span>
-              <strong>{{ formatBytes(storageStats.disk_free_bytes) }}</strong>
+
+            <div v-if="storageStats" class="storage-grid">
+              <div v-for="[storageKey, label] in STORAGE_KEYS" :key="storageKey" class="storage-item">
+                <span>{{ label }}</span>
+                <strong>{{ formatBytes(storageStats[storageKey]) }}</strong>
+              </div>
             </div>
           </div>
-          <p v-if="storageStats">{{ storageStats.data_dir }}</p>
-        </div>
-      </section>
-    </div>
-  </main>
+          <div class="panel-footer">
+            <button type="button" class="primary" :disabled="!storageDirty || busy.storage" @click="saveStorageSettings">
+              {{ busy.storage ? "Saving…" : "Save storage policy" }}
+            </button>
+          </div>
+        </section>
+      </div>
+    </template>
+  </div>
 </template>

@@ -55,6 +55,26 @@ def ensure_lightweight_migrations():
             "ADD COLUMN current_sequence_id VARCHAR(100)"
         )
 
+    colour_columns = {
+        "full_resolution": "BOOLEAN NOT NULL DEFAULT 1",
+        "day_auto_white_balance": "BOOLEAN NOT NULL DEFAULT 1",
+        "day_wb_red": "FLOAT NOT NULL DEFAULT 1.0",
+        "day_wb_blue": "FLOAT NOT NULL DEFAULT 1.0",
+        "day_saturation": "FLOAT NOT NULL DEFAULT 1.0",
+        "day_hue": "FLOAT NOT NULL DEFAULT 0.0",
+        "night_auto_white_balance": "BOOLEAN NOT NULL DEFAULT 0",
+        "night_wb_red": "FLOAT NOT NULL DEFAULT 2.2",
+        "night_wb_blue": "FLOAT NOT NULL DEFAULT 1.8",
+        "night_saturation": "FLOAT NOT NULL DEFAULT 1.0",
+        "night_hue": "FLOAT NOT NULL DEFAULT 0.0",
+    }
+
+    for column_name, column_type in colour_columns.items():
+        if column_name not in columns:
+            migrations.append(
+                f"ALTER TABLE node_camera_settings ADD COLUMN {column_name} {column_type}"
+            )
+
     if not migrations:
         return
 
@@ -70,4 +90,4 @@ def get_db_session():
     finally:
         db.close()
 
-from app.models import capture_storage_settings, node, node_camera_settings, node_device_settings, node_environment, node_heater_state, node_overlay_settings  # noqa: F401
+from app.models import capture_storage_settings, node, node_camera_settings, node_capture_state, node_device_settings, node_environment, node_heater_state, node_overlay_settings  # noqa: F401

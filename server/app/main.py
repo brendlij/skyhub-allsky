@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import json
+import re
 import shutil
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -8,7 +9,7 @@ from zoneinfo import ZoneInfo
 from uuid import uuid4
 from astral import LocationInfo
 from astral.sun import sun
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -21,12 +22,19 @@ from app.config import get_settings
 from app.repositories.capture_storage_settings_repository import CaptureStorageSettingsRepository
 from app.repositories.node_repository import NodeRepository
 from app.repositories.node_camera_settings_repository import NodeCameraSettingsRepository
+from app.repositories.node_capture_state_repository import NodeCaptureStateRepository
 from app.repositories.node_device_settings_repository import NodeDeviceSettingsRepository
 from app.repositories.node_environment_repository import NodeEnvironmentRepository
 from app.repositories.node_heater_state_repository import NodeHeaterStateRepository
 from app.repositories.node_overlay_settings_repository import NodeOverlaySettingsRepository
 from app.realtime.connection_manager import ConnectionManager
-from app.overlays import apply_overlays_to_image
+from app.overlays import (
+    overlay_presets,
+    render_capture_image,
+    unknown_tokens,
+    variable_catalog,
+    variable_values,
+)
 
 logger = structlog.get_logger()
 connections = ConnectionManager()
@@ -549,6 +557,7 @@ async def delete_node(node_id: str, db: Session = Depends(get_db_session)):
 
 class SequenceStartRequest(BaseModel):
     interval_seconds: int | None = None
+    full_resolution: bool | None = None
     exposure_ms: int | None = None
     gain: float | None = None
     auto_exposure: bool | None = None
@@ -564,6 +573,7 @@ class SequenceStopRequest(BaseModel):
 
 class NodeCameraSettingsUpdate(BaseModel):
     interval_seconds: int | None = None
+    full_resolution: bool | None = None
     width: int | None = None
     height: int | None = None
     format: str | None = None
@@ -575,6 +585,16 @@ class NodeCameraSettingsUpdate(BaseModel):
     night_exposure_ms: int | None = None
     night_auto_gain: bool | None = None
     night_gain: float | None = None
+    day_auto_white_balance: bool | None = None
+    day_wb_red: float | None = Field(default=None, ge=0.1, le=8.0)
+    day_wb_blue: float | None = Field(default=None, ge=0.1, le=8.0)
+    day_saturation: float | None = Field(default=None, ge=0.0, le=4.0)
+    day_hue: float | None = Field(default=None, ge=-180, le=180)
+    night_auto_white_balance: bool | None = None
+    night_wb_red: float | None = Field(default=None, ge=0.1, le=8.0)
+    night_wb_blue: float | None = Field(default=None, ge=0.1, le=8.0)
+    night_saturation: float | None = Field(default=None, ge=0.0, le=4.0)
+    night_hue: float | None = Field(default=None, ge=-180, le=180)
 
 
 class OverlayEntity(BaseModel):
@@ -659,16 +679,24 @@ def parse_iso_datetime(value: str | None) -> datetime | None:
     return parsed
 
 
-def archive_period(captured_at: datetime) -> tuple[str, str]:
-    local_timezone = ZoneInfo(settings.timezone)
-    local_time = captured_at.astimezone(local_timezone)
-    location = LocationInfo(
+def capture_location() -> LocationInfo:
+    return LocationInfo(
         name="SkyHub",
         region="",
         timezone=settings.timezone,
         latitude=settings.latitude,
         longitude=settings.longitude,
     )
+
+
+def capture_observer():
+    return capture_location().observer
+
+
+def archive_period(captured_at: datetime) -> tuple[str, str]:
+    local_timezone = ZoneInfo(settings.timezone)
+    local_time = captured_at.astimezone(local_timezone)
+    location = capture_location()
 
     today_sun = sun(location.observer, date=local_time.date(), tzinfo=local_timezone)
     sunrise = today_sun["sunrise"]
@@ -689,6 +717,7 @@ def camera_settings_to_dict(camera_settings) -> dict:
     return {
         "node_id": camera_settings.node_id,
         "interval_seconds": camera_settings.interval_seconds,
+        "full_resolution": camera_settings.full_resolution,
         "width": camera_settings.width,
         "height": camera_settings.height,
         "format": camera_settings.format or "jpg",
@@ -697,12 +726,22 @@ def camera_settings_to_dict(camera_settings) -> dict:
             "exposure_ms": camera_settings.day_exposure_ms,
             "auto_gain": camera_settings.day_auto_gain,
             "gain": camera_settings.day_gain,
+            "auto_white_balance": camera_settings.day_auto_white_balance,
+            "wb_red": camera_settings.day_wb_red,
+            "wb_blue": camera_settings.day_wb_blue,
+            "saturation": camera_settings.day_saturation,
+            "hue": camera_settings.day_hue,
         },
         "night": {
             "auto_exposure": camera_settings.night_auto_exposure,
             "exposure_ms": camera_settings.night_exposure_ms,
             "auto_gain": camera_settings.night_auto_gain,
             "gain": camera_settings.night_gain,
+            "auto_white_balance": camera_settings.night_auto_white_balance,
+            "wb_red": camera_settings.night_wb_red,
+            "wb_blue": camera_settings.night_wb_blue,
+            "saturation": camera_settings.night_saturation,
+            "hue": camera_settings.night_hue,
         },
         "capture_enabled": camera_settings.capture_enabled,
         "current_sequence_id": camera_settings.current_sequence_id,
@@ -766,36 +805,41 @@ def current_period() -> str:
 
 
 def capture_settings_for_period(camera_settings, period: str) -> dict:
-    profile = getattr(camera_settings, "day" if period == "day" else "night", None)
+    prefix = "day" if period == "day" else "night"
+    profile = getattr(camera_settings, prefix, None)
 
-    if profile is None:
-        if period == "day":
-            auto_exposure = camera_settings.day_auto_exposure
-            exposure_ms = camera_settings.day_exposure_ms
-            auto_gain = camera_settings.day_auto_gain
-            gain = camera_settings.day_gain
-        else:
-            auto_exposure = camera_settings.night_auto_exposure
-            exposure_ms = camera_settings.night_exposure_ms
-            auto_gain = camera_settings.night_auto_gain
-            gain = camera_settings.night_gain
-    else:
-        auto_exposure = profile["auto_exposure"]
-        exposure_ms = profile["exposure_ms"]
-        auto_gain = profile["auto_gain"]
-        gain = profile["gain"]
+    def value_for(name: str):
+        if profile is not None:
+            return profile.get(name)
+
+        return getattr(camera_settings, f"{prefix}_{name}", None)
+
+    full_resolution = bool(getattr(camera_settings, "full_resolution", False))
 
     return {
         "interval_seconds": camera_settings.interval_seconds,
-        "width": camera_settings.width,
-        "height": camera_settings.height,
+        # Omitting the size is what tells the driver to use the full sensor; the
+        # server cannot name that resolution because it does not know the sensor.
+        "width": None if full_resolution else camera_settings.width,
+        "height": None if full_resolution else camera_settings.height,
+        "full_resolution": full_resolution,
         "format": camera_settings.format or "jpg",
         "period": period,
-        "auto_exposure": auto_exposure,
-        "exposure_ms": exposure_ms,
-        "auto_gain": auto_gain,
-        "gain": gain,
+        "auto_exposure": value_for("auto_exposure"),
+        "exposure_ms": value_for("exposure_ms"),
+        "auto_gain": value_for("auto_gain"),
+        "gain": value_for("gain"),
+        "auto_white_balance": value_for("auto_white_balance"),
+        # The node takes libcamera ColourGains directly; hue is not a camera
+        # control so it stays server-side and is applied when rendering.
+        "colour_gains": [value_for("wb_red"), value_for("wb_blue")],
+        "saturation": value_for("saturation"),
     }
+
+
+def capture_hue_for_period(camera_settings, period: str) -> float:
+    prefix = "day" if period == "day" else "night"
+    return float(getattr(camera_settings, f"{prefix}_hue", 0.0) or 0.0)
 
 
 def apply_sequence_overrides(capture_settings: dict, request: SequenceStartRequest | None) -> dict:
@@ -828,6 +872,24 @@ def device_config_message(device_settings) -> dict:
     }
 
 
+CAPTURE_FILENAME_TIMESTAMP = re.compile(r"(\d{8})_(\d{6})")
+
+
+def captured_at_from_filename(filename: str, fallback: datetime) -> datetime:
+    match = CAPTURE_FILENAME_TIMESTAMP.search(filename)
+
+    if not match:
+        return fallback
+
+    try:
+        return datetime.strptime(
+            f"{match.group(1)}{match.group(2)}",
+            "%Y%m%d%H%M%S",
+        ).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return fallback
+
+
 def capture_record_from_path(file_path: Path) -> dict:
     relative_path = file_path.relative_to(settings.captures_dir)
     node_id = relative_path.parts[0]
@@ -835,7 +897,9 @@ def capture_record_from_path(file_path: Path) -> dict:
     period = relative_path.parts[2]
     original_path = settings.originals_dir / relative_path
     thumbnail_path = settings.thumbnails_dir / relative_path
+    stat_result = file_path.stat()
     width, height = image_dimensions(file_path)
+    modified_at = datetime.fromtimestamp(stat_result.st_mtime, tz=timezone.utc)
 
     return {
         "node_id": node_id,
@@ -848,11 +912,11 @@ def capture_record_from_path(file_path: Path) -> dict:
         "width": width,
         "height": height,
         "aspect_ratio": width / height if width and height else None,
-        "size_bytes": file_path.stat().st_size,
-        "modified_at": datetime.fromtimestamp(
-            file_path.stat().st_mtime,
-            tz=timezone.utc,
-        ).isoformat(),
+        "size_bytes": stat_result.st_size,
+        "modified_at": modified_at.isoformat(),
+        # Overlay rendering and retention rewrite mtime, so the capture time baked
+        # into the filename is the stable key to sort on.
+        "captured_at": captured_at_from_filename(file_path.name, modified_at).isoformat(),
     }
 
 
@@ -865,21 +929,45 @@ def iter_capture_files():
             yield file_path
 
 
+_dimension_cache: dict[tuple[str, int, int], tuple[int | None, int | None]] = {}
+
+
 def image_dimensions(file_path: Path) -> tuple[int | None, int | None]:
     try:
-        with Image.open(file_path) as image:
-            return image.width, image.height
+        stat_result = file_path.stat()
     except OSError:
-        logger.warning("capture.dimensions_failed", path=str(file_path))
         return None, None
 
+    # Listing a night means thousands of records; decoding every header each time
+    # is what makes the captures view crawl.
+    cache_key = (str(file_path), stat_result.st_mtime_ns, stat_result.st_size)
+    cached = _dimension_cache.get(cache_key)
 
-def create_thumbnail(source_path: Path, thumbnail_path: Path, max_size: tuple[int, int] = (420, 236)) -> None:
+    if cached is not None:
+        return cached
+
+    try:
+        with Image.open(file_path) as image:
+            dimensions = (image.width, image.height)
+    except OSError:
+        logger.warning("capture.dimensions_failed", path=str(file_path))
+        dimensions = (None, None)
+
+    if len(_dimension_cache) > 20000:
+        _dimension_cache.clear()
+
+    _dimension_cache[cache_key] = dimensions
+    return dimensions
+
+
+def create_thumbnail(source_path: Path, thumbnail_path: Path, max_size: tuple[int, int] = (720, 720)) -> None:
     thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
 
     with Image.open(source_path) as image:
-        image.thumbnail(max_size)
-        image.convert("RGB").save(thumbnail_path, format="JPEG", quality=82, optimize=True)
+        # A square box keeps the short edge from binding on 4:3 and circular allsky
+        # frames, which a landscape box shrank to roughly a third of the tile size.
+        image.thumbnail(max_size, Image.LANCZOS)
+        image.convert("RGB").save(thumbnail_path, format="JPEG", quality=88, optimize=True)
 
 
 def capture_artifact_paths(rendered_file_path: Path) -> list[Path]:
@@ -1037,6 +1125,66 @@ async def update_node_settings(
     }
 
 
+def overlay_preview_values(node_id: str | None, db: Session) -> dict:
+    """Resolve overlay variables the way a capture right now would.
+
+    Pulls the last capture's per-frame metadata plus current environment, heater
+    and sun/moon so the editor previews real numbers instead of invented ones.
+    """
+    if not node_id:
+        return {}
+
+    capture_state = NodeCaptureStateRepository(db).get(node_id)
+    camera_settings = NodeCameraSettingsRepository(db).get_or_create(node_id)
+    environment = NodeEnvironmentRepository(db).get(node_id)
+    heater_state = NodeHeaterStateRepository(db).get(node_id)
+
+    captured_at = getattr(capture_state, "captured_at", None) or datetime.now(timezone.utc)
+
+    if captured_at.tzinfo is None:
+        captured_at = captured_at.replace(tzinfo=timezone.utc)
+
+    period = getattr(capture_state, "period", None) or current_period()
+
+    context = {
+        "node_id": node_id,
+        "captured_at": captured_at.astimezone(ZoneInfo(settings.timezone)),
+        "period": period,
+        "timezone_name": settings.timezone,
+        "environment": environment,
+        "heater": heater_state,
+        "camera_settings": camera_settings,
+        "metadata": getattr(capture_state, "capture_metadata", None) or {},
+        "observer": capture_observer(),
+        "sequence_id": getattr(capture_state, "sequence_id", None),
+        "filename": getattr(capture_state, "filename", None),
+        "size_bytes": getattr(capture_state, "size_bytes", None),
+        "format": getattr(capture_state, "image_format", None),
+        "width": getattr(capture_state, "width", None),
+        "height": getattr(capture_state, "height", None),
+    }
+
+    return variable_values(context)
+
+
+@app.get("/api/overlays/variables")
+async def list_overlay_variables(
+    node_id: str | None = None,
+    db: Session = Depends(get_db_session),
+):
+    live_values = overlay_preview_values(node_id, db)
+    # Sun and moon resolve from the clock alone, so their presence says nothing
+    # about whether real capture data is available. Report on the capture instead.
+    has_capture = bool(node_id) and NodeCaptureStateRepository(db).get(node_id) is not None
+
+    return {
+        "variables": variable_catalog(live_values),
+        "presets": overlay_presets(),
+        "node_id": node_id,
+        "has_live_values": has_capture,
+    }
+
+
 @app.get("/api/nodes/{node_id}/overlays")
 async def get_node_overlays(node_id: str, db: Session = Depends(get_db_session)):
     repo = NodeOverlaySettingsRepository(db)
@@ -1061,6 +1209,20 @@ async def update_node_overlays(
 
     overlay_settings = repo.update(node_id, values)
     payload = overlay_settings_to_dict(overlay_settings)
+
+    # An unrecognised token renders as empty text with no other symptom, so report
+    # it back rather than letting a typo quietly blank out part of the overlay.
+    warnings = []
+
+    for entity in overlay_settings.entities or []:
+        for token in unknown_tokens(entity.get("text") or ""):
+            warnings.append({"entity_id": entity.get("id"), "token": token})
+
+    payload["warnings"] = warnings
+
+    if warnings:
+        logger.warning("overlay.unknown_tokens", node_id=node_id, warnings=warnings)
+
     await connections.broadcast_dashboard(
         {
             "type": "overlay.updated",
@@ -1263,40 +1425,85 @@ async def stop_sequence(
     }
 
 
+@app.get("/api/captures/dates")
+async def list_capture_dates(node_id: str | None = None):
+    groups: dict[str, dict] = {}
+
+    # Walking names only (no image decode) keeps this cheap enough to cover the
+    # whole archive, so the date list always shows true counts.
+    for file_path in iter_capture_files() or []:
+        relative_path = file_path.relative_to(settings.captures_dir)
+        file_node_id, archive_date, period = relative_path.parts[0:3]
+
+        if node_id is not None and file_node_id != node_id:
+            continue
+
+        group = groups.setdefault(
+            archive_date,
+            {"archive_date": archive_date, "day": 0, "night": 0, "total": 0},
+        )
+
+        if period in group:
+            group[period] += 1
+        else:
+            group[period] = 1
+
+        group["total"] += 1
+
+    dates = sorted(groups.values(), key=lambda group: group["archive_date"], reverse=True)
+
+    return {
+        "dates": dates,
+        "total": sum(group["total"] for group in dates),
+    }
+
+
 @app.get("/api/captures")
 async def list_captures(
     node_id: str | None = None,
     archive_date: str | None = None,
     period: str | None = None,
-    limit: int = 100,
+    limit: int = 0,
+    offset: int = 0,
 ):
     records = []
 
     for file_path in iter_capture_files() or []:
-        record = capture_record_from_path(file_path)
+        relative_path = file_path.relative_to(settings.captures_dir)
+        file_node_id, file_archive_date, file_period = relative_path.parts[0:3]
 
-        if node_id is not None and record["node_id"] != node_id:
+        # Filter on the path before building the record; the record does file I/O.
+        if node_id is not None and file_node_id != node_id:
             continue
 
-        if archive_date is not None and record["archive_date"] != archive_date:
+        if archive_date is not None and file_archive_date != archive_date:
             continue
 
-        if period is not None and record["period"] != period:
+        if period is not None and file_period != period:
             continue
 
-        records.append(record)
+        records.append(capture_record_from_path(file_path))
 
-    records.sort(key=lambda record: record["modified_at"], reverse=True)
+    records.sort(key=lambda record: record["captured_at"], reverse=True)
+    total = len(records)
+    offset = max(0, offset)
+    # limit=0 means "everything that matched" so a selected night is never
+    # truncated by a budget shared with every other night in the archive.
+    page = records[offset:] if limit <= 0 else records[offset:offset + limit]
 
     return {
-        "captures": records[:limit],
-        "count": min(len(records), limit),
-        "total": len(records),
+        "captures": page,
+        "count": len(page),
+        "offset": offset,
+        "total": total,
     }
 
 
 @app.get("/api/captures/latest")
-async def latest_capture(node_id: str | None = None):
+async def latest_capture(
+    node_id: str | None = None,
+    db: Session = Depends(get_db_session),
+):
     records = []
 
     for file_path in iter_capture_files() or []:
@@ -1310,8 +1517,20 @@ async def latest_capture(node_id: str | None = None):
     if not records:
         raise HTTPException(status_code=404, detail="No captures found")
 
-    records.sort(key=lambda record: record["modified_at"], reverse=True)
-    return records[0]
+    records.sort(key=lambda record: record["captured_at"], reverse=True)
+    latest = records[0]
+
+    # Per-frame metadata lives in node_capture_state rather than on disk. Attach it
+    # when it belongs to this exact frame, so the dashboard reports the exposure the
+    # sensor actually used instead of the value that was requested.
+    capture_state = NodeCaptureStateRepository(db).get(latest["node_id"])
+
+    if capture_state is not None and capture_state.filename == latest["filename"]:
+        latest["metadata"] = capture_state.capture_metadata or {}
+    else:
+        latest["metadata"] = {}
+
+    return latest
 
 
 @app.get("/api/captures/{node_id}/{archive_date}/{period}/{filename}")
@@ -1436,7 +1655,7 @@ async def upload_capture(
     environment = NodeEnvironmentRepository(db).get(upload_node_id)
     heater_state = NodeHeaterStateRepository(db).get(upload_node_id)
     camera_settings = NodeCameraSettingsRepository(db).get_or_create(upload_node_id)
-    apply_overlays_to_image(
+    render_capture_image(
         output_path,
         overlay_settings,
         node_id=node_id,
@@ -1446,9 +1665,30 @@ async def upload_capture(
         environment=environment,
         heater=heater_state,
         camera_settings=camera_settings,
+        hue_shift=capture_hue_for_period(camera_settings, period),
+        metadata=parsed_metadata,
+        observer=capture_observer(),
+        sequence_id=sequence_id,
+        size_bytes=output_path.stat().st_size,
+        image_format=upload_format,
     )
     create_thumbnail(output_path, thumbnail_path)
     capture_record = capture_record_from_path(output_path)
+    NodeCaptureStateRepository(db).record(
+        upload_node_id,
+        {
+            "sequence_id": sequence_id,
+            "filename": capture_record["filename"],
+            "archive_date": archive_date,
+            "period": period,
+            "image_format": upload_format,
+            "width": capture_record["width"],
+            "height": capture_record["height"],
+            "size_bytes": capture_record["size_bytes"],
+            "capture_metadata": parsed_metadata,
+            "captured_at": captured_at,
+        },
+    )
     cleanup_result = enforce_capture_retention(storage_settings, protected_paths={output_path})
 
     logger.info(
@@ -1467,7 +1707,9 @@ async def upload_capture(
         {
             "type": "capture.uploaded",
             "node_id": node_id,
-            "capture": capture_record,
+            # Carry the frame metadata so a live update shows the same exposure
+            # details as a page load, which reads it back from capture state.
+            "capture": {**capture_record, "metadata": parsed_metadata},
             "cleanup": cleanup_result,
         }
     )

@@ -1,40 +1,26 @@
 <script setup>
-import { RouterLink, RouterView } from "vue-router";
-import { useSkyHub } from "./composables/useSkyHub";
+import { RouterView } from "vue-router";
+import AppSidebar from "./components/layout/AppSidebar.vue";
+import AppTopbar from "./components/layout/AppTopbar.vue";
+import ConfirmDialog from "./components/ui/ConfirmDialog.vue";
+import ToastStack from "./components/ui/ToastStack.vue";
+import { useTheme } from "./composables/useTheme";
 
-const { nodes, selectedNode, selectedNodeId, selectNode } = useSkyHub();
+const { sidebarCollapsed } = useTheme();
 </script>
 
 <template>
-  <div class="shell">
-    <header class="topbar">
-      <RouterLink class="brand" to="/monitor">
-        <strong>SkyHub</strong>
-      </RouterLink>
+  <div class="shell" :class="{ collapsed: sidebarCollapsed }">
+    <AppSidebar />
+    <AppTopbar />
 
-      <nav class="main-nav" aria-label="Main navigation">
-        <RouterLink to="/monitor">Monitor</RouterLink>
-        <RouterLink to="/captures">Captures</RouterLink>
-        <RouterLink to="/overlays">Overlays</RouterLink>
-        <RouterLink to="/settings">Settings</RouterLink>
-        <RouterLink to="/nodes">Nodes</RouterLink>
-      </nav>
-
-      <div class="top-actions">
-        <label v-if="nodes.length" class="node-select">
-          Node
-          <select v-model="selectedNodeId" @change="selectNode(selectedNodeId)">
-            <option v-for="node in nodes" :key="node.node_id" :value="node.node_id">
-              {{ node.node_id }}
-            </option>
-          </select>
-        </label>
-        <span v-if="selectedNode" class="status" :class="{ online: selectedNode.online }">
-          {{ selectedNode.online ? "online" : "offline" }}
-        </span>
+    <main class="workspace">
+      <div class="workspace-inner">
+        <RouterView />
       </div>
-    </header>
+    </main>
 
-    <RouterView />
+    <ToastStack />
+    <ConfirmDialog />
   </div>
 </template>

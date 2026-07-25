@@ -25,8 +25,10 @@ class MockCamera:
         filename = f"mock_{timestamp}_{uuid4().hex[:8]}.jpg"
         output_path = output_dir / filename
 
-        width = int(settings.get("width", 1280))
-        height = int(settings.get("height", 720))
+        # A null size means "use the sensor's full resolution"; the mock has no
+        # sensor, so it stands in with a 4:3 frame the same shape a Pi camera gives.
+        width = int(settings.get("width") or 2028)
+        height = int(settings.get("height") or 1520)
         exposure_ms = settings.get("exposure_ms")
         gain = settings.get("gain")
         auto_exposure = bool(settings.get("auto_exposure", False))

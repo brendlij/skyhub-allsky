@@ -1,0 +1,583 @@
+/* View-specific layout. Colours all resolve through tokens so both themes work. */
+
+/* ---------- Monitor ---------- */
+
+.monitor-grid {
+  display: grid;
+  align-items: start;
+  gap: var(--space-4);
+  grid-template-columns: minmax(0, 2.1fr) minmax(280px, 1fr);
+}
+
+.monitor-tiles {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.image-frame {
+  display: grid;
+  place-items: center;
+  min-height: 340px;
+  border-radius: var(--radius);
+  background: var(--image-backdrop);
+}
+
+.image-frame img {
+  width: 100%;
+  max-height: min(72vh, 780px);
+  border-radius: var(--radius);
+  object-fit: contain;
+}
+
+.capture-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.capture-meta strong {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-weight: 550;
+}
+
+@media (max-width: 1180px) {
+  .monitor-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---------- Captures ---------- */
+
+.capture-browser {
+  display: grid;
+  align-items: start;
+  gap: var(--space-4);
+  grid-template-columns: minmax(210px, 260px) minmax(0, 1fr);
+}
+
+.date-list {
+  display: grid;
+  overflow-y: auto;
+  gap: 3px;
+  max-height: min(70vh, 640px);
+  padding: var(--space-2);
+}
+
+.date-item {
+  display: grid;
+  gap: 2px;
+  min-height: 0;
+  /* The global button rule centres its content; these are grid cards whose text
+   * must stay flush left. */
+  justify-items: start;
+  justify-content: start;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  background: transparent;
+  text-align: left;
+}
+
+.date-item:hover {
+  border-color: transparent;
+  background: var(--surface-hover);
+}
+
+.date-item.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.date-item strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.date-item small {
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.date-item.active small {
+  color: var(--accent);
+}
+
+.capture-grid {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fill, minmax(184px, 1fr));
+  padding: var(--space-4);
+}
+
+.capture-tile {
+  display: grid;
+  gap: 0;
+  overflow: hidden;
+  min-height: 0;
+  justify-items: stretch;
+  justify-content: stretch;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0;
+  background: var(--surface-raised);
+  text-align: left;
+}
+
+.capture-tile:hover {
+  border-color: var(--accent);
+  background: var(--surface-raised);
+}
+
+.capture-tile img {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  background: var(--image-backdrop);
+  object-fit: contain;
+}
+
+.capture-tile-meta {
+  display: grid;
+  gap: 1px;
+  padding: 7px 9px;
+}
+
+.capture-tile-meta strong {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.capture-tile-meta small {
+  color: var(--text-faint);
+  font-size: 10.5px;
+}
+
+.capture-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--space-3) var(--space-4);
+}
+
+/* ---------- Lightbox ---------- */
+
+.lightbox {
+  position: fixed;
+  z-index: 250;
+  inset: 0;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  background: #04070deb;
+  backdrop-filter: blur(4px);
+}
+
+.lightbox-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+}
+
+.lightbox-header-text {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.lightbox-header-text strong {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.lightbox-header-text small {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.lightbox-stage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 0;
+  padding: var(--space-4);
+}
+
+.lightbox-stage img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: var(--radius);
+  object-fit: contain;
+}
+
+.lightbox-nav {
+  position: absolute;
+  top: 50%;
+  width: 42px;
+  min-height: 42px;
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  font-size: 19px;
+  transform: translateY(-50%);
+}
+
+.lightbox-nav.previous { left: var(--space-4); }
+.lightbox-nav.next { right: var(--space-4); }
+
+/* ---------- Settings ---------- */
+
+.settings-grid {
+  display: grid;
+  align-items: start;
+  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(370px, 1fr));
+}
+
+.settings-note {
+  grid-column: 1 / -1;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.period-card {
+  display: grid;
+  gap: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  background: var(--surface-inset);
+}
+
+.period-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.storage-grid {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+}
+
+.storage-item {
+  display: grid;
+  gap: 2px;
+}
+
+.storage-item span {
+  color: var(--text-faint);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.storage-item strong {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+
+.meter {
+  overflow: hidden;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--surface-active);
+}
+
+.meter-fill {
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  transition: width var(--transition);
+}
+
+.meter-fill.warning { background: var(--warning); }
+.meter-fill.danger { background: var(--danger); }
+
+/* Sticky save bar so a long settings panel never hides its own save button. */
+.save-bar {
+  position: sticky;
+  z-index: 10;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+}
+
+/* ---------- Colour controls ---------- */
+
+.colour-controls {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.colour-controls > button {
+  justify-self: start;
+}
+
+.colour-sliders {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.colour-gains {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: 1fr 1fr;
+}
+
+.colour-swatch {
+  height: 8px;
+  border-radius: var(--radius-full);
+}
+
+.tint-track {
+  background: linear-gradient(90deg, #22c55e, var(--text-faint), #d946ef);
+}
+
+.warmth-track {
+  background: linear-gradient(90deg, #60a5fa, var(--text-faint), #fbbf24);
+}
+
+/* ---------- Nodes ---------- */
+
+.node-cards {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fill, minmax(268px, 1fr));
+}
+
+.node-card {
+  display: grid;
+  gap: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  background: var(--surface);
+}
+
+.node-card.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.node-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.node-card-head strong {
+  font-family: var(--font-mono);
+  font-size: 14px;
+}
+
+.node-card dl {
+  display: grid;
+  gap: 5px;
+  grid-template-columns: auto 1fr;
+  font-size: 12px;
+}
+
+.node-card dt {
+  color: var(--text-faint);
+}
+
+.node-card dd {
+  margin: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-card-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* ---------- Overlay editor ---------- */
+
+.overlay-layout {
+  display: grid;
+  align-items: start;
+  gap: var(--space-4);
+  grid-template-columns: minmax(0, 1.5fr) minmax(300px, 1fr);
+}
+
+.overlay-stage {
+  position: relative;
+  display: grid;
+  overflow: hidden;
+  place-items: center;
+  min-height: 320px;
+  border-radius: var(--radius);
+  background: var(--image-backdrop);
+}
+
+.overlay-stage img {
+  width: 100%;
+  max-height: min(64vh, 720px);
+  object-fit: contain;
+}
+
+.overlay-entity {
+  position: absolute;
+  min-height: 0;
+  border: 1px dashed transparent;
+  border-radius: 4px;
+  font-family: var(--font-sans);
+  line-height: 1.2;
+  white-space: pre;
+  cursor: grab;
+}
+
+.overlay-entity:hover {
+  border-color: var(--accent);
+}
+
+.overlay-entity.selected {
+  border-color: var(--accent);
+  border-style: solid;
+}
+
+.overlay-placeholder {
+  padding: var(--space-6);
+  color: var(--text-faint);
+  font-size: 12.5px;
+  text-align: center;
+}
+
+.overlay-variable-picker {
+  display: grid;
+  overflow-y: auto;
+  gap: var(--space-3);
+  max-height: 340px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  background: var(--surface-inset);
+}
+
+.overlay-variable-search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.overlay-variable-search input {
+  flex: 1;
+  min-width: 150px;
+}
+
+.overlay-variable-group h4 {
+  margin-bottom: 5px;
+  color: var(--text-faint);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.overlay-variables {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.overlay-variables button {
+  min-height: 26px;
+  padding: 0 8px;
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.overlay-variables button em {
+  max-width: 118px;
+  overflow: hidden;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.entity-list {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.entity-row {
+  display: grid;
+  gap: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  background: var(--surface-raised);
+}
+
+.entity-row.selected {
+  border-color: var(--accent);
+}
+
+.entity-row-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.entity-row-head .grow {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.entity-preview {
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  padding: 4px 7px;
+  background: var(--surface-inset);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+textarea.invalid {
+  border-color: var(--warning);
+}
+
+@media (max-width: 1180px) {
+  .overlay-layout,
+  .capture-browser {
+    grid-template-columns: 1fr;
+  }
+
+  .date-list {
+    max-height: 220px;
+  }
+}

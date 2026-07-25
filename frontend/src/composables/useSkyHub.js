@@ -1,8 +1,13 @@
 import { computed, ref } from "vue";
 import { captureUrl, preloadImage, requestJson } from "../api/skyhub";
+import { confirmAction } from "./useConfirm";
+import { useToasts } from "./useToasts";
+
+const { notify, notifyError, pushToast } = useToasts();
 
 const fields = [
   "interval_seconds",
+  "full_resolution",
   "width",
   "height",
   "format",
@@ -13,7 +18,17 @@ const fields = [
   "night_auto_exposure",
   "night_exposure_ms",
   "night_auto_gain",
-  "night_gain"
+  "night_gain",
+  "day_auto_white_balance",
+  "day_wb_red",
+  "day_wb_blue",
+  "day_saturation",
+  "day_hue",
+  "night_auto_white_balance",
+  "night_wb_red",
+  "night_wb_blue",
+  "night_saturation",
+  "night_hue"
 ];
 
 const nodes = ref([]);
@@ -22,30 +37,39 @@ const settings = ref(null);
 const latest = ref(null);
 const latestImageUrl = ref(null);
 const captures = ref([]);
+const captureDates = ref([]);
+const captureTotal = ref(0);
 const overlaySettings = ref(null);
 const deviceSettings = ref(null);
 const environmentTelemetry = ref(null);
 const heaterState = ref(null);
 const storageStats = ref(null);
 const storageSettings = ref(null);
-const message = ref("");
 const loading = ref(false);
+// "live" | "connecting" | "offline" - previously the socket could drop and
+// reconnect forever with nothing in the UI to say the data had gone stale.
+const connectionState = ref("connecting");
+const lastUpdatedAt = ref(null);
 let initialized = false;
 let dashboardSocket = null;
 let reconnectTimer = null;
-let captureLimit = 96;
+let reconnectDelay = 1000;
+let wasDisconnected = false;
+let captureScope = { archiveDate: null, period: null };
 
 const selectedNode = computed(() =>
   nodes.value.find((node) => node.node_id === selectedNodeId.value)
 );
 
-function setMessage(text) {
-  message.value = text || "";
+function setMessage(text, tone = "success") {
+  if (!text) return;
+  pushToast(text, { tone });
 }
 
 function settingsFromApi(data) {
   return {
     interval_seconds: data.interval_seconds,
+    full_resolution: data.full_resolution,
     width: data.width,
     height: data.height,
     format: data.format,
@@ -57,6 +81,16 @@ function settingsFromApi(data) {
     night_exposure_ms: data.night.exposure_ms,
     night_auto_gain: data.night.auto_gain,
     night_gain: data.night.gain,
+    day_auto_white_balance: data.day.auto_white_balance,
+    day_wb_red: data.day.wb_red,
+    day_wb_blue: data.day.wb_blue,
+    day_saturation: data.day.saturation,
+    day_hue: data.day.hue,
+    night_auto_white_balance: data.night.auto_white_balance,
+    night_wb_red: data.night.wb_red,
+    night_wb_blue: data.night.wb_blue,
+    night_saturation: data.night.saturation,
+    night_hue: data.night.hue,
     capture_enabled: data.capture_enabled,
     current_sequence_id: data.current_sequence_id
   };
@@ -192,29 +226,85 @@ async function loadLatest() {
   }
 }
 
-async function loadCaptures(limit = 96) {
+async function loadCaptureDates() {
+  if (!selectedNodeId.value) {
+    captureDates.value = [];
+    return;
+  }
+
+  const data = await requestJson(
+    `/api/captures/dates?node_id=${encodeURIComponent(selectedNodeId.value)}`
+  );
+  captureDates.value = data.dates;
+}
+
+async function loadCaptures(scope = {}) {
   if (!selectedNodeId.value) return;
 
-  captureLimit = limit;
-  const data = await requestJson(`/api/captures?node_id=${encodeURIComponent(selectedNodeId.value)}&limit=${limit}`);
+  const archiveDate = scope.archiveDate ?? captureScope.archiveDate;
+  const period = scope.period ?? captureScope.period;
+  captureScope = { archiveDate, period };
+
+  const params = new URLSearchParams({ node_id: selectedNodeId.value, limit: "0" });
+
+  // Scoping the request to one date and period is what stops older nights from
+  // being cut off by a limit shared across the whole archive.
+  if (archiveDate) params.set("archive_date", archiveDate);
+  if (period) params.set("period", period);
+
+  const data = await requestJson(`/api/captures?${params.toString()}`);
   captures.value = data.captures;
+  captureTotal.value = data.total;
+}
+
+/* One unreachable endpoint used to reject the whole Promise.all and leave the
+ * dashboard half-loaded with a single opaque message. Settle everything, then
+ * report the failures together. */
+async function loadAll(tasks) {
+  const results = await Promise.allSettled(tasks.map(([, run]) => run()));
+  const failed = results
+    .map((result, index) => (result.status === "rejected" ? tasks[index][0] : null))
+    .filter(Boolean);
+
+  if (failed.length) {
+    pushToast(
+      `Could not load: ${failed.join(", ")}`,
+      { tone: "warning", title: "Partial refresh" }
+    );
+  }
+
+  lastUpdatedAt.value = new Date().toISOString();
+  return failed;
+}
+
+function nodeScopedLoaders() {
+  return [
+    ["settings", loadSettings],
+    ["overlays", loadOverlays],
+    ["devices", loadDeviceSettings],
+    ["environment", loadEnvironmentTelemetry],
+    ["heater", loadHeaterState],
+    ["latest capture", loadLatest],
+    ["capture dates", loadCaptureDates],
+    ["captures", loadCaptures]
+  ];
 }
 
 async function refreshDashboard() {
   loading.value = true;
 
   try {
-    await loadNodes();
-    await Promise.all([
-      loadSettings(),
-      loadOverlays(),
-      loadDeviceSettings(),
-      loadEnvironmentTelemetry(),
-      loadHeaterState(),
-      loadLatest(),
-      loadCaptures(captureLimit),
-      loadStorageStats(),
-      loadStorageSettings()
+    try {
+      await loadNodes();
+    } catch (error) {
+      notifyError(error, { title: "Could not reach the server" });
+      return;
+    }
+
+    await loadAll([
+      ...nodeScopedLoaders(),
+      ["storage usage", loadStorageStats],
+      ["storage policy", loadStorageSettings]
     ]);
   } finally {
     loading.value = false;
@@ -222,129 +312,181 @@ async function refreshDashboard() {
 }
 
 async function selectNode(nodeId) {
+  if (!nodeId || nodeId === selectedNodeId.value) return;
+
   selectedNodeId.value = nodeId;
-  await Promise.all([loadSettings(), loadOverlays(), loadDeviceSettings(), loadEnvironmentTelemetry(), loadHeaterState(), loadLatest(), loadCaptures(captureLimit)]);
+  captureScope = { archiveDate: null, period: null };
+  await loadAll(nodeScopedLoaders());
 }
 
 async function deleteNode(nodeId) {
-  await requestJson(`/api/nodes/${nodeId}`, { method: "DELETE" });
+  const confirmed = await confirmAction({
+    title: `Delete ${nodeId}?`,
+    message:
+      "The node record and its settings, overlays and telemetry are removed. Captures already on disk are kept.",
+    confirmLabel: "Delete node"
+  });
+
+  if (!confirmed) return;
+
+  try {
+    await requestJson(`/api/nodes/${nodeId}`, { method: "DELETE" });
+  } catch (error) {
+    notifyError(error, { title: "Delete failed" });
+    return;
+  }
 
   if (selectedNodeId.value === nodeId) {
     selectedNodeId.value = null;
   }
 
-  setMessage(`Deleted ${nodeId}`);
+  notify(`Deleted ${nodeId}`);
   await refreshDashboard();
 }
 
-async function saveSettings() {
-  if (!selectedNodeId.value || !settings.value) return;
+/* Views call these straight from @click. Without a catch here a failed request
+ * became an unhandled rejection with nothing shown to the user. `busy` lets the
+ * button that triggered the action disable itself while it runs. */
+const busy = ref({});
 
-  const body = {};
+async function runAction(key, label, run) {
+  busy.value = { ...busy.value, [key]: true };
 
-  for (const field of fields) {
-    body[field] = payloadValue(settings.value[field]);
+  try {
+    return await run();
+  } catch (error) {
+    notifyError(error, { title: label });
+    return null;
+  } finally {
+    const next = { ...busy.value };
+    delete next[key];
+    busy.value = next;
   }
+}
 
-  if (!body.format) {
-    body.format = "jpg";
-  }
-
-  const result = await requestJson(`/api/nodes/${selectedNodeId.value}/settings`, {
+function putJson(url, body) {
+  return requestJson(url, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });
-
-  settings.value = settingsFromApi(result.settings);
-  setMessage(result.node_notified ? "Settings saved and sent to node" : "Settings saved");
 }
 
-async function saveOverlays() {
-  if (!selectedNodeId.value || !overlaySettings.value) return;
+function saveSettings() {
+  if (!selectedNodeId.value || !settings.value) return Promise.resolve();
 
-  overlaySettings.value = await requestJson(`/api/nodes/${selectedNodeId.value}/overlays`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  return runAction("settings", "Could not save camera settings", async () => {
+    const body = {};
+
+    for (const field of fields) {
+      body[field] = payloadValue(settings.value[field]);
+    }
+
+    if (!body.format) body.format = "jpg";
+
+    const result = await putJson(`/api/nodes/${selectedNodeId.value}/settings`, body);
+    settings.value = settingsFromApi(result.settings);
+    notify(result.node_notified ? "Settings saved and sent to node" : "Settings saved (node offline)");
+  });
+}
+
+function saveOverlays() {
+  if (!selectedNodeId.value || !overlaySettings.value) return Promise.resolve();
+
+  return runAction("overlays", "Could not save overlays", async () => {
+    const result = await putJson(`/api/nodes/${selectedNodeId.value}/overlays`, {
       enabled: overlaySettings.value.enabled,
       entities: overlaySettings.value.entities
-    })
+    });
+
+    overlaySettings.value = result;
+
+    if (result.warnings?.length) {
+      pushToast(
+        `Unknown variables saved: ${result.warnings.map((w) => w.token).join(", ")}`,
+        { tone: "warning", title: "These will render as empty text" }
+      );
+    } else {
+      notify("Overlays saved");
+    }
   });
-  setMessage("Overlay settings saved");
 }
 
-async function saveDeviceSettings() {
-  if (!selectedNodeId.value || !deviceSettings.value) return;
+function saveDeviceSettings() {
+  if (!selectedNodeId.value || !deviceSettings.value) return Promise.resolve();
 
-  const result = await requestJson(`/api/nodes/${selectedNodeId.value}/devices`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  return runAction("devices", "Could not save device settings", async () => {
+    const result = await putJson(`/api/nodes/${selectedNodeId.value}/devices`, {
       devices: deviceSettings.value.devices
-    })
-  });
+    });
 
-  deviceSettings.value = deviceSettingsFromApi(result.device_settings);
-  setMessage(result.node_notified ? "Device settings saved and sent to node" : "Device settings saved");
+    deviceSettings.value = deviceSettingsFromApi(result.device_settings);
+    notify(result.node_notified ? "Devices saved and sent to node" : "Devices saved (node offline)");
+  });
 }
 
-async function saveStorageSettings() {
-  if (!storageSettings.value) return;
+function saveStorageSettings() {
+  if (!storageSettings.value) return Promise.resolve();
 
-  const result = await requestJson("/api/storage/settings", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  return runAction("storage", "Could not save storage policy", async () => {
+    const result = await putJson("/api/storage/settings", {
       day_capture_enabled: storageSettings.value.day_capture_enabled,
       night_capture_enabled: storageSettings.value.night_capture_enabled,
       retention_days: storageSettings.value.retention_days || null,
       max_storage_gb: storageSettings.value.max_storage_gb || null
-    })
-  });
+    });
 
-  storageSettings.value = result.storage_settings;
-  await loadStorageStats();
-  setMessage("Storage policy saved");
+    storageSettings.value = result.storage_settings;
+    await loadStorageStats().catch(() => {});
+    notify("Storage policy saved");
+  });
 }
 
-async function startCapture() {
-  if (!selectedNodeId.value) return;
+function startCapture() {
+  if (!selectedNodeId.value) return Promise.resolve();
 
-  const result = await requestJson(`/api/nodes/${selectedNodeId.value}/sequence/start`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: "{}"
+  return runAction("capture", "Could not start capture", async () => {
+    const result = await requestJson(`/api/nodes/${selectedNodeId.value}/sequence/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}"
+    });
+
+    if (result.status === "queued") {
+      pushToast("Node is offline - capture queued until it reconnects", { tone: "warning" });
+    } else {
+      notify("Capture started");
+    }
+
+    await loadSettings().catch(() => {});
   });
-
-  setMessage(result.status === "queued" ? "Capture queued for node" : `Started ${result.sequence_id}`);
-  await loadSettings();
 }
 
-async function stopCapture() {
-  if (!selectedNodeId.value) return;
+function stopCapture() {
+  if (!selectedNodeId.value) return Promise.resolve();
 
-  await requestJson(`/api/nodes/${selectedNodeId.value}/sequence/stop`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: "{}"
+  return runAction("capture", "Could not stop capture", async () => {
+    await requestJson(`/api/nodes/${selectedNodeId.value}/sequence/stop`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}"
+    });
+
+    notify("Capture stopped");
+    await loadSettings().catch(() => {});
   });
-
-  setMessage("Stop sent");
-  await loadSettings();
 }
 
-async function setHeaterEnabled(enabled) {
-  if (!selectedNodeId.value) return;
+function setHeaterEnabled(enabled) {
+  if (!selectedNodeId.value) return Promise.resolve();
 
-  const result = await requestJson(`/api/nodes/${selectedNodeId.value}/heater`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ enabled })
+  return runAction("heater", "Could not switch the heater", async () => {
+    const result = await putJson(`/api/nodes/${selectedNodeId.value}/heater`, { enabled });
+    heaterState.value = result.heater;
+    notify(result.node_notified
+      ? `Heater ${enabled ? "on" : "off"}`
+      : `Heater ${enabled ? "on" : "off"} saved (node offline)`);
   });
-
-  heaterState.value = result.heater;
-  setMessage(result.node_notified ? "Heater updated" : "Heater setting saved");
 }
 
 function dashboardWebSocketUrl() {
@@ -352,13 +494,25 @@ function dashboardWebSocketUrl() {
   return `${protocol}//${window.location.host}/ws/dashboard`;
 }
 
+function captureMatchesScope(capture) {
+  if (captureScope.archiveDate && capture.archive_date !== captureScope.archiveDate) return false;
+  if (captureScope.period && capture.period !== captureScope.period) return false;
+
+  return true;
+}
+
 async function applyCaptureUploaded(event) {
   if (!event.capture || event.node_id !== selectedNodeId.value) return;
 
   const exists = captures.value.some((capture) => capture.path === event.capture.path);
 
+  if (!exists && captureMatchesScope(event.capture)) {
+    captures.value = [event.capture, ...captures.value];
+    captureTotal.value += 1;
+  }
+
   if (!exists) {
-    captures.value = [event.capture, ...captures.value].slice(0, captureLimit);
+    loadCaptureDates().catch(() => {});
   }
 
   const nextUrl = captureUrl(event.capture);
@@ -428,9 +582,25 @@ function handleDashboardEvent(event) {
 function connectDashboardSocket() {
   if (dashboardSocket && dashboardSocket.readyState < WebSocket.CLOSING) return;
 
+  connectionState.value = "connecting";
   dashboardSocket = new WebSocket(dashboardWebSocketUrl());
 
+  dashboardSocket.onopen = () => {
+    const reconnected = wasDisconnected;
+    wasDisconnected = false;
+    reconnectDelay = 1000;
+    connectionState.value = "live";
+
+    // Events that arrived while the socket was down were missed, so resync
+    // rather than carrying on with stale data.
+    if (reconnected) {
+      refreshDashboard().catch(() => {});
+    }
+  };
+
   dashboardSocket.onmessage = (socketEvent) => {
+    lastUpdatedAt.value = new Date().toISOString();
+
     try {
       handleDashboardEvent(JSON.parse(socketEvent.data));
     } catch {
@@ -440,12 +610,17 @@ function connectDashboardSocket() {
 
   dashboardSocket.onclose = () => {
     dashboardSocket = null;
+    wasDisconnected = true;
+    connectionState.value = "offline";
 
     if (reconnectTimer === null) {
+      // Back off instead of hammering every 2s while the server is down.
       reconnectTimer = window.setTimeout(() => {
         reconnectTimer = null;
         connectDashboardSocket();
-      }, 2000);
+      }, reconnectDelay);
+
+      reconnectDelay = Math.min(reconnectDelay * 2, 15000);
     }
   };
 }
@@ -455,7 +630,7 @@ function ensureRealtimeRefresh() {
 
   initialized = true;
 
-  refreshDashboard().catch((error) => setMessage(error.message));
+  refreshDashboard().catch((error) => notifyError(error));
   connectDashboardSocket();
 }
 
@@ -470,17 +645,22 @@ export function useSkyHub() {
     latest,
     latestImageUrl,
     captures,
+    captureDates,
+    captureTotal,
     overlaySettings,
     deviceSettings,
     environmentTelemetry,
     heaterState,
     storageStats,
     storageSettings,
-    message,
     loading,
+    busy,
+    connectionState,
+    lastUpdatedAt,
     captureUrl,
     deleteNode,
     loadCaptures,
+    loadCaptureDates,
     loadDeviceSettings,
     loadEnvironmentTelemetry,
     loadHeaterState,
