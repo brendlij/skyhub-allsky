@@ -72,13 +72,28 @@ const heater = computed(() => {
 const exposure = computed(() => {
   const meta = latest.value?.metadata || {};
   const period = latest.value?.period === "day" ? "day" : "night";
-  const ms = meta.actual_exposure_ms ?? settings.value?.[`${period}_exposure_ms`];
-  const gain = meta.actual_analogue_gain ?? settings.value?.[`${period}_gain`];
+  const actualExposureMs = meta.actual_exposure_ms;
+  const actualAnalogueGain = meta.actual_analogue_gain;
+  const actualDigitalGain = meta.actual_digital_gain;
+  const ms = actualExposureMs ?? settings.value?.[`${period}_exposure_ms`];
+  const gain = actualAnalogueGain ?? settings.value?.[`${period}_gain`];
 
   if (!ms) return { value: "-", detail: "No exposure reported" };
 
   const time = ms >= 1000 ? `${(ms / 1000).toFixed(2).replace(/\.?0+$/, "")}s` : `${Math.round(ms)}ms`;
-  return { value: time, detail: gain ? `gain ${Number(gain).toFixed(1)}` : "" };
+  const detail = [];
+
+  if (actualAnalogueGain != null) {
+    detail.push(`gain ${Number(actualAnalogueGain).toFixed(1)}x`);
+  } else if (gain) {
+    detail.push(`gain ${Number(gain).toFixed(1)}x`);
+  }
+
+  if (actualDigitalGain != null) {
+    detail.push(`dg ${Number(actualDigitalGain).toFixed(1)}x`);
+  }
+
+  return { value: time, detail: detail.join(" · ") };
 });
 </script>
 

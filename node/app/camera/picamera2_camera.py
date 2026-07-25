@@ -1,3 +1,4 @@
+import json
 import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
@@ -7,6 +8,7 @@ from uuid import uuid4
 import structlog
 
 from app.camera.base import CameraInfo, CaptureResult
+from app.config import NODE_DIR
 from app.camera.exposure import (
     DEFAULT_DAY_MEAN,
     DEFAULT_MEAN_THRESHOLD,
@@ -25,6 +27,8 @@ logger = structlog.get_logger()
 DEFAULT_JPEG_QUALITY = 95
 DEFAULT_SETTLE_FRAMES = 2
 ASPECT_TOLERANCE = 0.01
+DEFAULT_DAY_START_EXPOSURE_US = 5_000
+FRAME_DURATION_MARGIN_US = 1_000
 
 # Cheap luma source for the mean-target controller; decoding the full-resolution
 # main stream every frame just to average it would cost far more.
@@ -35,6 +39,7 @@ METERING_SIZE = (320, 240)
 # starting point for a Pi HQ camera under a typical light-polluted sky; they are
 # meant to be tuned per site from the UI.
 DEFAULT_NIGHT_COLOUR_GAINS = (2.2, 1.8)
+DAY_SEED_PATH = NODE_DIR / "data" / "picamera2_day_seed.json"
 
 
 class PiCamera2Camera:
@@ -53,6 +58,11 @@ class PiCamera2Camera:
         self._actual_size: tuple[int, int] | None = None
         self._metering_size: tuple[int, int] | None = None
         self._metering_mask = None
+        self._last_frame_metadata: dict[str, Any] | None = None
+        self._last_requested_controls: dict[str, Any] | None = None
+        self._last_capture_period: str | None = None
+        self._day_seed: dict[str, float] | None = self._load_day_seed()
+        self._capture_index = 0
         self._needs_settle = True
         self._started = False
         self._controller: MeanTargetController | None = None
@@ -81,6 +91,8 @@ class PiCamera2Camera:
         return await asyncio.to_thread(self._capture_sync, settings, output_dir)
 
     def _capture_sync(self, settings: dict[str, Any], output_dir: Path) -> CaptureResult:
+        self._capture_index += 1
+        frame_index = self._capture_index
         now = datetime.now(timezone.utc)
         timestamp = now.strftime("%Y%m%d_%H%M%S")
         stem = f"picamera2_{timestamp}_{uuid4().hex[:8]}"
@@ -99,11 +111,14 @@ class PiCamera2Camera:
         save_raw = bool(settings.get("raw", False))
         output_path = output_dir / f"{stem}.{image_format}"
         raw_path = output_dir / f"{stem}.dng" if save_raw else None
+        frame_metadata: dict[str, Any] = {}
+        measured_mean: float | None = None
 
         size = self._resolve_output_size(settings)
         self._ensure_configured(size=size, save_raw=save_raw, settings=settings)
         controller = self._sync_controller(settings)
         self._apply_controls(settings, controller)
+        requested_controls = self._last_requested_controls or {}
 
         request = self._picamera2.capture_request()
 
@@ -118,13 +133,19 @@ class PiCamera2Camera:
         finally:
             request.release()
 
+        self._last_frame_metadata = frame_metadata
+        self._last_capture_period = str(settings.get("period") or "night")
+
         exposure_state = None
+
+        actual_exposure_us = frame_metadata.get("ExposureTime")
+        actual_gain = frame_metadata.get("AnalogueGain")
 
         if controller is not None and measured_mean is not None:
             exposure_state = controller.update(
                 measured_mean,
-                actual_exposure_us=frame_metadata.get("ExposureTime"),
-                actual_gain=frame_metadata.get("AnalogueGain"),
+                actual_exposure_us=actual_exposure_us,
+                actual_gain=actual_gain,
             )
             logger.info(
                 "picamera2.exposure.metered",
@@ -135,6 +156,55 @@ class PiCamera2Camera:
                 next_exposure_ms=round(exposure_state.exposure_us / 1000, 1),
                 next_gain=exposure_state.gain,
             )
+
+        period = str(settings.get("period") or "night")
+
+        if (
+            period == "day"
+            and controller is not None
+            and exposure_state is not None
+            and exposure_state.within_threshold
+            and actual_exposure_us is not None
+            and actual_gain is not None
+        ):
+            self._save_day_seed(int(actual_exposure_us), float(actual_gain))
+
+        if exposure_state is not None:
+            logger.info(
+                "picamera2.convergence",
+                frame_index=frame_index,
+                mean=round(measured_mean, 4) if measured_mean is not None else None,
+                actual_exposure_ms=self._microseconds_to_ms(actual_exposure_us),
+                actual_gain=actual_gain,
+                actual_digital_gain=frame_metadata.get("DigitalGain"),
+                next_exposure_ms=self._microseconds_to_ms(exposure_state.exposure_us),
+                next_gain=exposure_state.gain,
+                target_mean=round(exposure_state.target_mean, 4),
+                within_threshold=exposure_state.within_threshold,
+            )
+
+        logger.info(
+            "picamera2.frame",
+            frame_index=frame_index,
+            requested_exposure_us=requested_controls.get("ExposureTime"),
+            requested_gain=requested_controls.get("AnalogueGain"),
+            requested_frame_duration_limits=requested_controls.get("FrameDurationLimits"),
+            requested_ae_enable=requested_controls.get("AeEnable"),
+            requested_colour_gains=requested_controls.get("ColourGains"),
+            actual_exposure_us=actual_exposure_us,
+            actual_gain=actual_gain,
+            actual_digital_gain=frame_metadata.get("DigitalGain"),
+            frame_duration=frame_metadata.get("FrameDuration"),
+            lux=frame_metadata.get("Lux"),
+            ae_enable=frame_metadata.get("AeEnable"),
+            ColourGains=list(frame_metadata["ColourGains"])
+            if frame_metadata.get("ColourGains")
+            else None,
+            mean=round(measured_mean, 4) if measured_mean is not None else None,
+            controller_target=round(exposure_state.target_mean, 4) if exposure_state else None,
+            controller_next_exposure=exposure_state.exposure_us if exposure_state else None,
+            controller_next_gain=exposure_state.gain if exposure_state else None,
+        )
 
         width, height = self._actual_size or size
 
@@ -393,16 +463,16 @@ class PiCamera2Camera:
         threshold = float(settings.get("mean_threshold") or DEFAULT_MEAN_THRESHOLD)
         limits = self._exposure_limits(settings)
         key = (mode, period, target_mean, threshold, limits)
+        seed_exposure_us, seed_gain = self._controller_seed(settings, period)
 
         if self._controller is None or self._controller_key != key:
-            exposure_ms = settings.get("exposure_ms") or 1000
             self._controller = MeanTargetController(
                 target_mean=target_mean,
                 threshold=threshold,
                 limits=limits,
                 mode=mode,
-                exposure_us=int(float(exposure_ms) * 1000),
-                gain=float(settings.get("gain") or limits.min_gain),
+                exposure_us=seed_exposure_us,
+                gain=seed_gain,
             )
             self._controller_key = key
             logger.info(
@@ -411,11 +481,76 @@ class PiCamera2Camera:
                 period=period,
                 target_mean=target_mean,
                 threshold=threshold,
+                seed_exposure_us=seed_exposure_us,
+                seed_gain=seed_gain,
                 max_exposure_ms=limits.max_exposure_us / 1000,
                 max_gain=limits.max_gain,
             )
 
         return self._controller
+
+    def _controller_seed(self, settings: dict[str, Any], period: str) -> tuple[int, float]:
+        last_metadata = self._last_frame_metadata if self._last_capture_period == period else None
+        seed_exposure_us: int | None = None
+        seed_gain: float | None = None
+
+        if last_metadata is not None:
+            actual_exposure_us = last_metadata.get("ExposureTime")
+            actual_gain = last_metadata.get("AnalogueGain")
+
+            if actual_exposure_us is not None:
+                seed_exposure_us = int(actual_exposure_us)
+
+            if actual_gain is not None:
+                seed_gain = float(actual_gain)
+
+        if period == "day":
+            if self._day_seed is not None:
+                seed_exposure_us = int(self._day_seed.get("exposure_us") or 0) or None
+                seed_gain = float(self._day_seed.get("gain") or 0) or None
+
+            return seed_exposure_us or DEFAULT_DAY_START_EXPOSURE_US, seed_gain or 1.0
+
+        exposure_ms = settings.get("exposure_ms")
+        gain = settings.get("gain")
+
+        return (
+            seed_exposure_us
+            or (int(float(exposure_ms) * 1000) if exposure_ms is not None else 1_000_000),
+            seed_gain or (float(gain) if gain is not None else 1.0),
+        )
+
+    def _load_day_seed(self) -> dict[str, float] | None:
+        try:
+            raw_text = DAY_SEED_PATH.read_text(encoding="utf-8")
+            data = json.loads(raw_text)
+        except FileNotFoundError:
+            return None
+        except Exception as error:
+            logger.warning("picamera2.day_seed.load_failed", error=str(error), path=str(DAY_SEED_PATH))
+            return None
+
+        exposure_us = data.get("exposure_us")
+        gain = data.get("gain")
+
+        if exposure_us is None or gain is None:
+            return None
+
+        return {"exposure_us": float(exposure_us), "gain": float(gain)}
+
+    def _save_day_seed(self, exposure_us: int, gain: float) -> None:
+        payload = {"exposure_us": int(exposure_us), "gain": float(gain)}
+
+        try:
+            DAY_SEED_PATH.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = DAY_SEED_PATH.with_suffix(".tmp")
+            temp_path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+            temp_path.replace(DAY_SEED_PATH)
+        except Exception as error:
+            logger.warning("picamera2.day_seed.save_failed", error=str(error), path=str(DAY_SEED_PATH))
+            return
+
+        self._day_seed = {"exposure_us": float(exposure_us), "gain": float(gain)}
 
     def _apply_controls(
         self,
@@ -438,9 +573,15 @@ class PiCamera2Camera:
 
         if exposure_us is not None:
             controls["ExposureTime"] = int(exposure_us)
-            # Frame duration caps exposure, so a long night exposure is silently
-            # truncated unless the limits are opened up to match it.
-            controls["FrameDurationLimits"] = (int(exposure_us) + 1000, int(exposure_us) + 1000)
+            period = str(settings.get("period") or "night")
+
+            if controller is None or controller.mode != MODE_AUTO or period != "day":
+                # Frame duration caps exposure, so long manual or night exposures
+                # still need the limit opened up to match the requested shutter.
+                controls["FrameDurationLimits"] = (
+                    int(exposure_us) + FRAME_DURATION_MARGIN_US,
+                    int(exposure_us) + FRAME_DURATION_MARGIN_US,
+                )
 
         if gain is not None:
             controls["AnalogueGain"] = float(gain)
@@ -459,10 +600,12 @@ class PiCamera2Camera:
             controls["Saturation"] = float(settings["saturation"])
 
         if controls == self._applied_controls:
+            self._last_requested_controls = dict(controls)
             return
 
         self._picamera2.set_controls(controls)
         self._applied_controls = controls
+        self._last_requested_controls = dict(controls)
 
         logger.info("picamera2.controls.applied", controls=self._loggable(controls))
 
