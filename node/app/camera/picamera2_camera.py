@@ -217,6 +217,7 @@ class PiCamera2Camera:
             metadata={
                 "captured_at": now.isoformat(),
                 "camera": "picamera2",
+                "frame_index": frame_index,
                 "auto_exposure": bool(settings.get("auto_exposure", False)),
                 "exposure_ms": settings.get("exposure_ms"),
                 "auto_gain": bool(settings.get("auto_gain", False)),

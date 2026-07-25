@@ -268,6 +268,13 @@ async def environment_loop(websocket):
 
 async def capture_sequence_loop(websocket, sequence_id: str, capture_settings: dict[str, Any]):
     interval_seconds = int(capture_settings.get("interval_seconds", 30))
+    startup_interval_seconds = 1.0
+    startup_deadline = asyncio.get_running_loop().time() + 10.0
+    startup_stable_frames = 0
+    startup_burst_active = bool(capture_settings.get("period") == "day") and (
+        bool(capture_settings.get("auto_exposure", False))
+        or bool(capture_settings.get("auto_gain", False))
+    )
     next_capture_at = asyncio.get_running_loop().time()
 
     logger.info(
@@ -285,7 +292,12 @@ async def capture_sequence_loop(websocket, sequence_id: str, capture_settings: d
                 await asyncio.sleep(next_capture_at - now)
 
             capture_started_at = asyncio.get_running_loop().time()
-            next_capture_at = capture_started_at + interval_seconds
+            active_interval_seconds = (
+                startup_interval_seconds
+                if startup_burst_active and capture_started_at < startup_deadline
+                else interval_seconds
+            )
+            next_capture_at = capture_started_at + active_interval_seconds
 
             await send_json(
                 websocket,
@@ -325,6 +337,38 @@ async def capture_sequence_loop(websocket, sequence_id: str, capture_settings: d
                 sequence_id=sequence_id,
                 capture_result=capture_result,
             )
+
+            capture_metadata = capture_result.metadata or {}
+
+            if startup_burst_active:
+                if capture_metadata.get("mean_within_threshold"):
+                    startup_stable_frames += 1
+                else:
+                    startup_stable_frames = 0
+
+                logger.info(
+                    "sequence.startup.convergence",
+                    sequence_id=sequence_id,
+                    frame_index=capture_metadata.get("frame_index"),
+                    mean=capture_metadata.get("mean"),
+                    actual_exposure_ms=capture_metadata.get("actual_exposure_ms"),
+                    actual_gain=capture_metadata.get("actual_analogue_gain"),
+                    next_exposure_ms=capture_metadata.get("next_exposure_ms"),
+                    next_gain=capture_metadata.get("next_gain"),
+                    stable_frames=startup_stable_frames,
+                    active_interval_seconds=active_interval_seconds,
+                    burst_active=True,
+                )
+
+                if startup_stable_frames >= 2 or capture_started_at >= startup_deadline:
+                    startup_burst_active = False
+                    logger.info(
+                        "sequence.startup.convergence.complete",
+                        sequence_id=sequence_id,
+                        stable_frames=startup_stable_frames,
+                        elapsed_seconds=round(capture_started_at - (startup_deadline - 10.0), 3),
+                        next_interval_seconds=interval_seconds,
+                    )
 
             if upload_result.get("status") == "skipped":
                 with suppress(FileNotFoundError):
