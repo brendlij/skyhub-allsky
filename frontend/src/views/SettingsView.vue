@@ -85,8 +85,12 @@ const STORAGE_KEYS = [
         <div class="panel-body">
           <div class="field-grid">
             <label class="field">
-              <span>Interval <em class="field-unit">seconds</em></span>
-              <input v-model.number="settings.interval_seconds" type="number" min="1" />
+              <span>Day interval <em class="field-unit">seconds</em></span>
+              <input v-model.number="settings.day_interval_seconds" type="number" min="1" />
+            </label>
+            <label class="field">
+              <span>Night interval <em class="field-unit">seconds</em></span>
+              <input v-model.number="settings.night_interval_seconds" type="number" min="1" />
             </label>
             <label class="field">
               <span>Format</span>
@@ -95,6 +99,9 @@ const STORAGE_KEYS = [
                 <option value="png">png</option>
               </select>
             </label>
+            <p class="field-hint">
+              The current active interval is {{ activePeriod === 'day' ? settings.day_interval_seconds : settings.night_interval_seconds }}s.
+            </p>
           </div>
 
           <div class="section">

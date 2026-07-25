@@ -7,6 +7,8 @@ const { notify, notifyError, pushToast } = useToasts();
 
 const fields = [
   "interval_seconds",
+  "day_interval_seconds",
+  "night_interval_seconds",
   "full_resolution",
   "width",
   "height",
@@ -69,6 +71,8 @@ function setMessage(text, tone = "success") {
 function settingsFromApi(data) {
   return {
     interval_seconds: data.interval_seconds,
+    day_interval_seconds: data.day_interval_seconds,
+    night_interval_seconds: data.night_interval_seconds,
     full_resolution: data.full_resolution,
     width: data.width,
     height: data.height,

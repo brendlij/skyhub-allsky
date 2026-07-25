@@ -162,10 +162,14 @@ async def dashboard():
             <div class="card-header text-uppercase small fw-semibold text-secondary">Settings</div>
             <div class="card-body">
               <div class="row g-3">
-                <div class="col-6 col-xl-3">
-                  <label class="form-label" for="interval_seconds">Interval seconds</label>
-                  <input id="interval_seconds" class="form-control" type="number" min="1">
-                </div>
+                                <div class="col-6 col-xl-3">
+                                    <label class="form-label" for="day_interval_seconds">Day interval seconds</label>
+                                    <input id="day_interval_seconds" class="form-control" type="number" min="1">
+                                </div>
+                                <div class="col-6 col-xl-3">
+                                    <label class="form-label" for="night_interval_seconds">Night interval seconds</label>
+                                    <input id="night_interval_seconds" class="form-control" type="number" min="1">
+                                </div>
                 <div class="col-6 col-xl-3">
                   <label class="form-label" for="width">Width</label>
                   <input id="width" class="form-control" type="number" min="1">
@@ -251,11 +255,11 @@ async def dashboard():
   <script>
     let selectedNodeId = null;
 
-    const fields = [
-      "interval_seconds", "width", "height", "format",
-      "day_auto_exposure", "day_exposure_ms", "day_auto_gain", "day_gain",
-      "night_auto_exposure", "night_exposure_ms", "night_auto_gain", "night_gain"
-    ];
+        const fields = [
+            "day_interval_seconds", "night_interval_seconds", "width", "height", "format",
+            "day_auto_exposure", "day_exposure_ms", "day_auto_gain", "day_gain",
+            "night_auto_exposure", "night_exposure_ms", "night_auto_gain", "night_gain"
+        ];
 
     function setMessage(text) {
       document.getElementById("message").textContent = text || "";
@@ -335,7 +339,8 @@ async def dashboard():
     async function loadSettings() {
       if (!selectedNodeId) return;
       const settings = await requestJson(`/api/nodes/${selectedNodeId}/settings`);
-      document.getElementById("interval_seconds").value = settings.interval_seconds;
+    document.getElementById("day_interval_seconds").value = settings.day_interval_seconds || settings.interval_seconds || "";
+    document.getElementById("night_interval_seconds").value = settings.night_interval_seconds || settings.interval_seconds || "";
       document.getElementById("width").value = settings.width;
       document.getElementById("height").value = settings.height;
       document.getElementById("format").value = settings.format;
@@ -573,6 +578,8 @@ class SequenceStopRequest(BaseModel):
 
 class NodeCameraSettingsUpdate(BaseModel):
     interval_seconds: int | None = None
+    day_interval_seconds: int | None = None
+    night_interval_seconds: int | None = None
     full_resolution: bool | None = None
     width: int | None = None
     height: int | None = None
@@ -714,9 +721,14 @@ def archive_period(captured_at: datetime) -> tuple[str, str]:
 
 
 def camera_settings_to_dict(camera_settings) -> dict:
+    day_interval_seconds = getattr(camera_settings, "day_interval_seconds", None)
+    night_interval_seconds = getattr(camera_settings, "night_interval_seconds", None)
+
     return {
         "node_id": camera_settings.node_id,
         "interval_seconds": camera_settings.interval_seconds,
+        "day_interval_seconds": day_interval_seconds or camera_settings.interval_seconds,
+        "night_interval_seconds": night_interval_seconds or camera_settings.interval_seconds,
         "full_resolution": camera_settings.full_resolution,
         "width": camera_settings.width,
         "height": camera_settings.height,
@@ -815,9 +827,12 @@ def capture_settings_for_period(camera_settings, period: str) -> dict:
         return getattr(camera_settings, f"{prefix}_{name}", None)
 
     full_resolution = bool(getattr(camera_settings, "full_resolution", False))
+    period_interval_seconds = getattr(camera_settings, f"{prefix}_interval_seconds", None)
 
     return {
-        "interval_seconds": camera_settings.interval_seconds,
+        "interval_seconds": period_interval_seconds or camera_settings.interval_seconds,
+        "day_interval_seconds": getattr(camera_settings, "day_interval_seconds", None),
+        "night_interval_seconds": getattr(camera_settings, "night_interval_seconds", None),
         # Omitting the size is what tells the driver to use the full sensor; the
         # server cannot name that resolution because it does not know the sensor.
         "width": None if full_resolution else camera_settings.width,

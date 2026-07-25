@@ -55,6 +55,18 @@ def ensure_lightweight_migrations():
             "ADD COLUMN current_sequence_id VARCHAR(100)"
         )
 
+    if "day_interval_seconds" not in columns:
+        migrations.append(
+            "ALTER TABLE node_camera_settings "
+            "ADD COLUMN day_interval_seconds INTEGER"
+        )
+
+    if "night_interval_seconds" not in columns:
+        migrations.append(
+            "ALTER TABLE node_camera_settings "
+            "ADD COLUMN night_interval_seconds INTEGER"
+        )
+
     colour_columns = {
         "full_resolution": "BOOLEAN NOT NULL DEFAULT 1",
         "day_auto_white_balance": "BOOLEAN NOT NULL DEFAULT 1",

@@ -12,6 +12,8 @@ class NodeCameraSettings(Base):
     node_id: Mapped[str] = mapped_column(String(100), primary_key=True)
 
     interval_seconds: Mapped[int] = mapped_column(Integer, default=60, nullable=False)
+    day_interval_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    night_interval_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Only the node knows its sensor's native size, so full resolution is a flag
     # rather than a number: when set, width/height are not sent and the driver
     # captures at the sensor's full readout.

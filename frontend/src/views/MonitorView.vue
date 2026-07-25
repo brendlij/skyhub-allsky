@@ -167,7 +167,7 @@ const exposure = computed(() => {
             label="Capture"
             :value="capturing ? 'Running' : 'Idle'"
             :tone="capturing ? 'accent' : ''"
-            :detail="settings?.interval_seconds ? `every ${settings.interval_seconds}s` : ''"
+            :detail="settings?.[`${latest?.period || 'night'}_interval_seconds`] ? `every ${settings[`${latest?.period || 'night'}_interval_seconds`]}s` : ''"
             icon="◉"
           />
           <StatTile
