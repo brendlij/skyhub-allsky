@@ -15,12 +15,16 @@ const fields = [
   "format",
   "day_auto_exposure",
   "day_exposure_ms",
+  "day_max_exposure_ms",
   "day_auto_gain",
   "day_gain",
+  "day_max_gain",
   "night_auto_exposure",
   "night_exposure_ms",
+  "night_max_exposure_ms",
   "night_auto_gain",
   "night_gain",
+  "night_max_gain",
   "day_auto_white_balance",
   "day_wb_red",
   "day_wb_blue",
@@ -79,12 +83,16 @@ function settingsFromApi(data) {
     format: data.format,
     day_auto_exposure: data.day.auto_exposure,
     day_exposure_ms: data.day.exposure_ms,
+    day_max_exposure_ms: data.day.max_exposure_ms,
     day_auto_gain: data.day.auto_gain,
     day_gain: data.day.gain,
+    day_max_gain: data.day.max_gain,
     night_auto_exposure: data.night.auto_exposure,
     night_exposure_ms: data.night.exposure_ms,
+    night_max_exposure_ms: data.night.max_exposure_ms,
     night_auto_gain: data.night.auto_gain,
     night_gain: data.night.gain,
+    night_max_gain: data.night.max_gain,
     day_auto_white_balance: data.day.auto_white_balance,
     day_wb_red: data.day.wb_red,
     day_wb_blue: data.day.wb_blue,
@@ -390,7 +398,16 @@ function saveSettings() {
 
     const result = await putJson(`/api/nodes/${selectedNodeId.value}/settings`, body);
     settings.value = settingsFromApi(result.settings);
-    notify(result.node_notified ? "Settings saved and sent to node" : "Settings saved (node offline)");
+
+    if (!result.node_notified) {
+      notify("Settings saved (node offline)");
+    } else if (result.settings?.capture_enabled) {
+      // The node picks these up before its next frame, so no restart is needed -
+      // but the capture already in flight still finishes on the old settings.
+      notify("Settings saved - the node applies them on its next capture");
+    } else {
+      notify("Settings saved and sent to node");
+    }
   });
 }
 

@@ -34,6 +34,73 @@ const cameraDirty = computed(() => Boolean(settings.value) && snapshot(settings.
 const storageDirty = computed(() => Boolean(storageSettings.value) && snapshot(storageSettings.value) !== storageBaseline.value);
 const deviceDirty = computed(() => Boolean(deviceSettings.value) && snapshot(deviceSettings.value) !== deviceBaseline.value);
 
+// Every frame off the sensor costs a full exposure. A fixed exposure needs only
+// the frame it keeps, but auto re-tunes constantly and pays for settle frames on
+// top - so a long exposure quietly overrides the interval either way.
+const AUTO_FRAMES_PER_CAPTURE = 4;
+
+// Exposures are entered in milliseconds because that is what the node takes, but
+// a night exposure is thought about in seconds.
+function asSeconds(milliseconds) {
+  const value = Number(milliseconds);
+
+  if (!value || value < 1000) return "";
+
+  return `${Number((value / 1000).toFixed(1))}s`;
+}
+
+// Saved settings reach a running sequence on its next frame, so the honest answer
+// to "when does this take effect" depends on how long the frame in flight is.
+const applyHint = computed(() => {
+  if (!settings.value?.capture_enabled) return "Applies when capture next starts.";
+
+  const period = activePeriod.value;
+  const exposureMs = Number(
+    settings.value[`${period}_auto_exposure`]
+      ? settings.value[`${period}_max_exposure_ms`]
+      : settings.value[`${period}_exposure_ms`]
+  );
+
+  if (exposureMs >= 30000) {
+    return `Capture is running: saved changes apply to the next capture, which can be`
+      + ` up to ${Math.round(exposureMs / 1000)}s away while the current exposure finishes.`
+      + " Restart capture to apply immediately.";
+  }
+
+  return "Capture is running: saved changes apply to the next capture, no restart needed.";
+});
+
+const cadenceWarning = computed(() => {
+  if (!settings.value) return null;
+
+  const period = activePeriod.value;
+  const auto = Boolean(settings.value[`${period}_auto_exposure`]);
+  const intervalSeconds = Number(
+    settings.value[`${period}_interval_seconds`] || settings.value.interval_seconds
+  );
+
+  if (auto && !Number(settings.value[`${period}_max_exposure_ms`])) {
+    return "With no maximum, auto exposure can run all the way to the sensor's own"
+      + " ceiling on a dark night, and a single capture then takes many minutes.";
+  }
+
+  const exposureMs = Number(
+    auto
+      ? settings.value[`${period}_max_exposure_ms`]
+      : settings.value[`${period}_exposure_ms`]
+  );
+
+  if (!exposureMs || !intervalSeconds) return null;
+
+  const captureSeconds = (exposureMs / 1000) * (auto ? AUTO_FRAMES_PER_CAPTURE : 1);
+
+  if (captureSeconds <= intervalSeconds) return null;
+
+  return `${auto ? "At the maximum exposure a" : "A"} capture takes about`
+    + ` ${Math.round(captureSeconds)}s, longer than the ${intervalSeconds}s interval,`
+    + " so frames will be spaced by the exposure rather than by the interval.";
+});
+
 const storageUsedRatio = computed(() => {
   const max = storageSettings.value?.max_storage_gb;
   const used = storageStats.value?.capture_storage_bytes;
@@ -145,12 +212,27 @@ const STORAGE_KEYS = [
                   Auto exposure
                 </label>
                 <label class="field">
-                  <span>Exposure <em class="field-unit">ms</em></span>
+                  <span>
+                    Exposure <em class="field-unit">ms</em>
+                    <em class="field-value">{{ asSeconds(settings[`${activePeriod}_exposure_ms`]) }}</em>
+                  </span>
                   <input
                     v-model.number="settings[`${activePeriod}_exposure_ms`]"
                     type="number"
                     min="1"
                     :disabled="settings[`${activePeriod}_auto_exposure`]"
+                  />
+                </label>
+                <label class="field">
+                  <span>
+                    Max exposure <em class="field-unit">ms</em>
+                    <em class="field-value">{{ asSeconds(settings[`${activePeriod}_max_exposure_ms`]) }}</em>
+                  </span>
+                  <input
+                    v-model.number="settings[`${activePeriod}_max_exposure_ms`]"
+                    type="number"
+                    min="1"
+                    :disabled="!settings[`${activePeriod}_auto_exposure`]"
                   />
                 </label>
                 <label class="check">
@@ -167,15 +249,26 @@ const STORAGE_KEYS = [
                     :disabled="settings[`${activePeriod}_auto_gain`]"
                   />
                 </label>
+                <label class="field">
+                  <span>Max gain</span>
+                  <input
+                    v-model.number="settings[`${activePeriod}_max_gain`]"
+                    type="number"
+                    step="0.1"
+                    min="1"
+                    :disabled="!settings[`${activePeriod}_auto_gain`]"
+                  />
+                </label>
               </div>
 
-              <p
-                v-if="settings[`${activePeriod}_auto_exposure`] || settings[`${activePeriod}_auto_gain`]"
-                class="callout warning"
-              >
-                Auto mode uses the mean-target controller. Its exposure and gain ceilings
-                are not configurable here yet, so on a dark night it can run to the sensor
-                maximum.
+              <p v-if="cadenceWarning" class="callout warning">
+                {{ cadenceWarning }}
+              </p>
+
+              <p class="field-hint">
+                Exposure and gain are only handed to the auto controller when the box above
+                is ticked; otherwise the node uses exactly the values set here. The maximums
+                bound the controller and are ignored in manual mode.
               </p>
 
               <ColourControls :settings="settings" :period="activePeriod" />
@@ -184,7 +277,9 @@ const STORAGE_KEYS = [
         </div>
 
         <div class="panel-footer">
-          <span v-if="cameraDirty" class="muted grow">Unsaved changes</span>
+          <span class="muted grow">
+            <template v-if="cameraDirty">Unsaved changes · </template>{{ applyHint }}
+          </span>
           <button type="button" class="primary" :disabled="!cameraDirty || busy.settings" @click="saveSettings">
             {{ busy.settings ? "Saving…" : "Save camera settings" }}
           </button>

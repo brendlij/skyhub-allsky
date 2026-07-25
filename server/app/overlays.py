@@ -238,6 +238,60 @@ def load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
+# The editor preview computes its label boxes with exactly these numbers. Keep the
+# two in step: a label lands where it was dragged only if both sides agree on how
+# big its box is. Deriving the height from the font size rather than from the
+# glyphs also keeps two labels of the same size the same height, where measuring
+# the drawn text made "DAY" shorter than "38.9 C" purely because it has no
+# descenders.
+OVERLAY_LINE_HEIGHT = 1.2
+OVERLAY_PADDING_RATIO = 0.22
+OVERLAY_MIN_PADDING = 5
+
+
+def overlay_font_size(entity: dict) -> int:
+    return max(8, int(entity.get("font_size") or 28))
+
+
+def overlay_padding(font_size: int) -> int:
+    return max(OVERLAY_MIN_PADDING, int(font_size * OVERLAY_PADDING_RATIO))
+
+
+def overlay_line_height(font_size: int) -> int:
+    return int(round(font_size * OVERLAY_LINE_HEIGHT))
+
+
+def text_box_size(draw: ImageDraw.ImageDraw, text: str, font, font_size: int) -> tuple[int, int]:
+    """Outer box of a label, padding included."""
+    lines = text.split("\n")
+    padding = overlay_padding(font_size)
+    width = max(int(round(draw.textlength(line, font=font))) for line in lines)
+
+    return width + padding * 2, overlay_line_height(font_size) * len(lines) + padding * 2
+
+
+def draw_label_text(draw: ImageDraw.ImageDraw, position: tuple[int, int], text: str, font, font_size: int, fill) -> None:
+    """Draw each line centred in its own fixed-height line box.
+
+    Anchoring on the baseline rather than on the glyph bounding box is what makes
+    the vertical position independent of which characters happen to be in the text.
+    """
+    left, top = position
+    line_height = overlay_line_height(font_size)
+
+    try:
+        ascent, descent = font.getmetrics()
+    except AttributeError:
+        # Bitmap fallback font: no metrics, no baseline anchors.
+        draw.text((left, top), text, font=font, fill=fill)
+        return
+
+    baseline = top + (line_height - (ascent + descent)) / 2 + ascent
+
+    for index, line in enumerate(text.split("\n")):
+        draw.text((left, baseline + index * line_height), line, font=font, fill=fill, anchor="ls")
+
+
 def format_value(value) -> str:
     if value is None:
         return ""
@@ -672,13 +726,10 @@ def render_capture_image(
             if not text:
                 continue
 
-            font = load_font(entity.get("font_size", 28))
-            text_bbox = draw.textbbox((0, 0), text, font=font)
-            text_width = text_bbox[2] - text_bbox[0]
-            text_height = text_bbox[3] - text_bbox[1]
-            padding = max(5, int(entity.get("font_size", 28) * 0.22))
-            box_width = text_width + padding * 2
-            box_height = text_height + padding * 2
+            font_size = overlay_font_size(entity)
+            font = load_font(font_size)
+            padding = overlay_padding(font_size)
+            box_width, box_height = text_box_size(draw, text, font, font_size)
             left, top = anchored_position(
                 entity.get("anchor", "top-left"),
                 min(1, max(0, float(entity.get("x", 0)))),
@@ -702,12 +753,7 @@ def render_capture_image(
                     fill=background,
                 )
 
-            draw.text(
-                (left + padding, top + padding - text_bbox[1]),
-                text,
-                font=font,
-                fill=color,
-            )
+            draw_label_text(draw, (left + padding, top + padding), text, font, font_size, color)
 
         image = Image.alpha_composite(image, overlay).convert("RGB")
         save_options = {}

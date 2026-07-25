@@ -447,22 +447,39 @@
 
 .overlay-entity {
   position: absolute;
+  display: block;
   min-height: 0;
-  border: 1px dashed transparent;
-  border-radius: 4px;
-  font-family: var(--font-sans);
-  line-height: 1.2;
+  border: 0;
+  /* Match what Pillow draws on the node: same family, same weight, so the box
+     measured here is the box that gets burned in. Selection is an outline, which
+     sits outside the box and cannot shift the label the way a border did. */
+  outline: 1px dashed transparent;
+  outline-offset: 0;
+  font-family: Arial, "DejaVu Sans", sans-serif;
+  font-weight: 400;
   white-space: pre;
+  text-align: left;
   cursor: grab;
 }
 
 .overlay-entity:hover {
-  border-color: var(--accent);
+  outline-color: var(--accent);
 }
 
 .overlay-entity.selected {
-  border-color: var(--accent);
-  border-style: solid;
+  outline-color: var(--accent);
+  outline-style: solid;
+}
+
+.overlay-entity:active {
+  cursor: grabbing;
+}
+
+.overlay-guide {
+  position: absolute;
+  z-index: 1;
+  background: var(--accent);
+  pointer-events: none;
 }
 
 .overlay-placeholder {

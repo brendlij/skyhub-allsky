@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import json
@@ -41,6 +42,47 @@ connections = ConnectionManager()
 settings = get_settings()
 
 
+PERIOD_WATCH_INTERVAL_SECONDS = 60
+
+
+async def period_watch_loop():
+    """Push the new profile to every node when day turns to night, and back.
+
+    Without this a node only ever learns its day/night profile when a sequence is
+    started or settings are saved, so a capture started in daylight kept shooting
+    with the day exposure profile - and the day mean target - all night, which
+    drives the auto exposure controller straight to the sensor's exposure ceiling.
+    """
+    period = current_period()
+
+    while True:
+        await asyncio.sleep(PERIOD_WATCH_INTERVAL_SECONDS)
+
+        try:
+            latest_period = current_period()
+
+            if latest_period == period:
+                continue
+
+            period = latest_period
+            db = SessionLocal()
+
+            try:
+                repo = NodeCameraSettingsRepository(db)
+
+                for node_id in connections.online_node_ids():
+                    camera_settings = repo.get_or_create(node_id)
+                    await connections.send_to_node(node_id, config_update_message(camera_settings))
+            finally:
+                db.close()
+
+            logger.info("period.changed", period=period)
+        except Exception as error:
+            # A failure here must not kill the watcher, or the next switchover is
+            # missed as well.
+            logger.warning("period.watch.failed", error=str(error))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     create_db_tables()
@@ -52,7 +94,12 @@ async def lifespan(app: FastAPI):
         db.close()
 
     logger.info("database.ready")
-    yield
+    watcher = asyncio.create_task(period_watch_loop())
+
+    try:
+        yield
+    finally:
+        watcher.cancel()
 
 
 app = FastAPI(
@@ -586,12 +633,16 @@ class NodeCameraSettingsUpdate(BaseModel):
     format: str | None = None
     day_auto_exposure: bool | None = None
     day_exposure_ms: int | None = None
+    day_max_exposure_ms: int | None = Field(default=None, ge=1)
     day_auto_gain: bool | None = None
     day_gain: float | None = None
+    day_max_gain: float | None = Field(default=None, ge=1.0)
     night_auto_exposure: bool | None = None
     night_exposure_ms: int | None = None
+    night_max_exposure_ms: int | None = Field(default=None, ge=1)
     night_auto_gain: bool | None = None
     night_gain: float | None = None
+    night_max_gain: float | None = Field(default=None, ge=1.0)
     day_auto_white_balance: bool | None = None
     day_wb_red: float | None = Field(default=None, ge=0.1, le=8.0)
     day_wb_blue: float | None = Field(default=None, ge=0.1, le=8.0)
@@ -736,8 +787,10 @@ def camera_settings_to_dict(camera_settings) -> dict:
         "day": {
             "auto_exposure": camera_settings.day_auto_exposure,
             "exposure_ms": camera_settings.day_exposure_ms,
+            "max_exposure_ms": getattr(camera_settings, "day_max_exposure_ms", None),
             "auto_gain": camera_settings.day_auto_gain,
             "gain": camera_settings.day_gain,
+            "max_gain": getattr(camera_settings, "day_max_gain", None),
             "auto_white_balance": camera_settings.day_auto_white_balance,
             "wb_red": camera_settings.day_wb_red,
             "wb_blue": camera_settings.day_wb_blue,
@@ -747,8 +800,10 @@ def camera_settings_to_dict(camera_settings) -> dict:
         "night": {
             "auto_exposure": camera_settings.night_auto_exposure,
             "exposure_ms": camera_settings.night_exposure_ms,
+            "max_exposure_ms": getattr(camera_settings, "night_max_exposure_ms", None),
             "auto_gain": camera_settings.night_auto_gain,
             "gain": camera_settings.night_gain,
+            "max_gain": getattr(camera_settings, "night_max_gain", None),
             "auto_white_balance": camera_settings.night_auto_white_balance,
             "wb_red": camera_settings.night_wb_red,
             "wb_blue": camera_settings.night_wb_blue,
@@ -844,6 +899,9 @@ def capture_settings_for_period(camera_settings, period: str) -> dict:
         "exposure_ms": value_for("exposure_ms"),
         "auto_gain": value_for("auto_gain"),
         "gain": value_for("gain"),
+        # Ceilings for the node's mean-target controller. Ignored when auto is off.
+        "max_exposure_ms": value_for("max_exposure_ms"),
+        "max_gain": value_for("max_gain"),
         "auto_white_balance": value_for("auto_white_balance"),
         # The node takes libcamera ColourGains directly; hue is not a camera
         # control so it stays server-side and is applied when rendering.
@@ -1352,6 +1410,7 @@ async def start_sequence(
         },
     )
     period = current_period()
+    overrides = request.model_dump(exclude_none=True) if request is not None else {}
     effective_settings = apply_sequence_overrides(
         capture_settings_for_period(camera_settings, period),
         request,
@@ -1361,6 +1420,10 @@ async def start_sequence(
         "type": "sequence.start",
         "sequence_id": sequence_id,
         "settings": effective_settings,
+        # Sent separately as well: the node keeps only these for the lifetime of
+        # the sequence and lets everything else follow the node's live config, so
+        # a settings change or the day/night switchover reaches a running capture.
+        "overrides": overrides,
     }
 
     sent = await connections.send_to_node(node_id, message)

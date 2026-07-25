@@ -23,15 +23,23 @@ class NodeCameraSettings(Base):
     height: Mapped[int] = mapped_column(Integer, default=1520, nullable=False)
     format: Mapped[str] = mapped_column(String(20), default="jpg", nullable=False)
 
+    # The auto exposure ceilings. Without them the mean-target controller is free
+    # to run to the sensor's own maximum - around 670s on an HQ camera - and since
+    # every frame (including the settle frames) then costs that long, the capture
+    # cadence collapses from minutes to hours.
     day_auto_exposure: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     day_exposure_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    day_max_exposure_ms: Mapped[int | None] = mapped_column(Integer, default=1000, nullable=True)
     day_auto_gain: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     day_gain: Mapped[float | None] = mapped_column(Float, nullable=True)
+    day_max_gain: Mapped[float | None] = mapped_column(Float, default=8.0, nullable=True)
 
     night_auto_exposure: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     night_exposure_ms: Mapped[int] = mapped_column(Integer, default=10000, nullable=False)
+    night_max_exposure_ms: Mapped[int | None] = mapped_column(Integer, default=30000, nullable=True)
     night_auto_gain: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     night_gain: Mapped[float] = mapped_column(Float, default=8, nullable=False)
+    night_max_gain: Mapped[float | None] = mapped_column(Float, default=16.0, nullable=True)
 
     # Colour. wb_red/wb_blue are libcamera ColourGains, green being the implicit
     # reference at 1.0. Auto white balance is left on for day and off for night:

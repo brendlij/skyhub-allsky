@@ -31,6 +31,64 @@ const previewRect = ref({
 });
 let resizeObserver = null;
 
+// Must match server/app/overlays.py: the burned-in label is only where you
+// dragged it if both sides build the box from the same numbers.
+const LINE_HEIGHT = 1.2;
+const PADDING_RATIO = 0.22;
+const MIN_PADDING = 5;
+
+// Snapping, in screen pixels so it feels the same at any preview size.
+const SNAP_DISTANCE = 7;
+// Matches the inset the presets use, so a hand-placed label can line up with one
+// that came from a preset.
+const SAFE_MARGIN = 0.02;
+
+const entityElements = new Map();
+const guides = ref([]);
+let dragContext = null;
+
+function registerEntityElement(entityId, element) {
+  if (element) {
+    entityElements.set(entityId, element);
+  } else {
+    entityElements.delete(entityId);
+  }
+}
+
+function nativePadding(fontSize) {
+  return Math.max(MIN_PADDING, Math.floor(fontSize * PADDING_RATIO));
+}
+
+function fontSizeOf(entity) {
+  return Math.max(8, Number(entity.font_size) || 28);
+}
+
+// How far the box extends from its anchor point: 0 = anchor on the leading edge,
+// 1 = on the trailing edge. Mirrors anchored_position() on the server.
+function anchorFractions(entity) {
+  const anchor = entity.anchor || "top-left";
+
+  return {
+    x: anchor.includes("right") ? 1 : anchor === "center" ? 0.5 : 0,
+    y: anchor.includes("bottom") ? 1 : anchor === "center" ? 0.5 : 0
+  };
+}
+
+/** Box of an entity in normalised image coordinates, from what is on screen. */
+function entityBox(entity) {
+  const element = entityElements.get(entity.id);
+  const width = element ? element.offsetWidth / previewRect.value.width : 0;
+  const height = element ? element.offsetHeight / previewRect.value.height : 0;
+  const fraction = anchorFractions(entity);
+
+  return {
+    width,
+    height,
+    left: (Number(entity.x) || 0) - fraction.x * width,
+    top: (Number(entity.y) || 0) - fraction.y * height
+  };
+}
+
 const enabledEntities = computed(() => props.overlays.entities || []);
 
 // Fetched from the server so the picker always matches what actually renders,
@@ -157,10 +215,9 @@ function previewText(entity) {
 }
 
 function entityStyle(entity) {
-  const nativeFontSize = Math.max(8, Number(entity.font_size) || 24);
-  const nativePadding = Math.max(5, nativeFontSize * 0.22);
+  const nativeFontSize = fontSizeOf(entity);
+  const padding = nativePadding(nativeFontSize) * previewRect.value.scale;
   const fontSize = nativeFontSize * previewRect.value.scale;
-  const padding = nativePadding * previewRect.value.scale;
   const translateX = entity.anchor?.includes("right")
     ? "-100%"
     : entity.anchor === "center"
@@ -179,8 +236,9 @@ function entityStyle(entity) {
     color: entity.color,
     background: hexWithOpacity(entity.background, entity.background_opacity),
     fontSize: `${fontSize}px`,
+    lineHeight: LINE_HEIGHT,
     padding: `${padding}px`,
-    borderRadius: `${Math.max(4, nativePadding) * previewRect.value.scale}px`
+    borderRadius: `${Math.max(4, nativePadding(nativeFontSize)) * previewRect.value.scale}px`
   };
 }
 
@@ -247,19 +305,110 @@ function pointerToImagePosition(event) {
   };
 }
 
+/**
+ * Positions worth lining up with, along one axis, in normalised coordinates.
+ *
+ * The frame's own edges, centre and safe margin, plus the leading edge, centre
+ * and trailing edge of every other visible label - so labels line up with each
+ * other the way they do in a drawing tool, instead of by eye.
+ */
+function snapTargets(entity, axis) {
+  const size = axis === "x" ? "width" : "height";
+  const start = axis === "x" ? "left" : "top";
+  const targets = [0, SAFE_MARGIN, 0.5, 1 - SAFE_MARGIN, 1];
+
+  for (const other of enabledEntities.value) {
+    if (other.id === entity.id || !other.enabled) continue;
+
+    const box = entityBox(other);
+
+    if (!box[size]) continue;
+
+    targets.push(box[start], box[start] + box[size] / 2, box[start] + box[size]);
+  }
+
+  return targets;
+}
+
+/**
+ * Nudge one axis of the box onto the nearest target.
+ *
+ * All three of the box's own edges are candidates, so dragging a label near
+ * another one's right edge snaps right-to-right as readily as left-to-left.
+ */
+function snapAxis(entity, axis, boxStart, boxSize) {
+  const threshold = SNAP_DISTANCE
+    / (axis === "x" ? previewRect.value.width : previewRect.value.height);
+  const edges = [boxStart, boxStart + boxSize / 2, boxStart + boxSize];
+  let best = null;
+
+  for (const target of snapTargets(entity, axis)) {
+    for (const edge of edges) {
+      const distance = Math.abs(target - edge);
+
+      if (distance <= threshold && (!best || distance < best.distance)) {
+        best = { distance, delta: target - edge, position: target };
+      }
+    }
+  }
+
+  if (!best) return { start: boxStart, guide: null };
+
+  return {
+    start: boxStart + best.delta,
+    guide: { axis, position: best.position }
+  };
+}
+
 function updateEntityPosition(event) {
-  if (!draggingEntity.value) return;
+  const entity = draggingEntity.value;
+
+  if (!entity || !dragContext) return;
 
   const pointer = pointerToImagePosition(event);
 
   if (!pointer) return;
 
-  draggingEntity.value.x = Math.min(1, Math.max(0, pointer.x - dragOffset.value.x));
-  draggingEntity.value.y = Math.min(1, Math.max(0, pointer.y - dragOffset.value.y));
+  const { width, height } = dragContext;
+  const fraction = anchorFractions(entity);
+  let left = pointer.x - dragOffset.value.x - fraction.x * width;
+  let top = pointer.y - dragOffset.value.y - fraction.y * height;
+  const active = [];
+
+  // Alt is the usual "place it exactly here" escape hatch.
+  if (!event.altKey) {
+    const horizontal = snapAxis(entity, "x", left, width);
+    const vertical = snapAxis(entity, "y", top, height);
+
+    left = horizontal.start;
+    top = vertical.start;
+
+    if (horizontal.guide) active.push(horizontal.guide);
+    if (vertical.guide) active.push(vertical.guide);
+  }
+
+  guides.value = active;
+  applyBox(entity, left, top, width, height);
+}
+
+/** Store a box position back as an anchor point, kept fully inside the frame. */
+function applyBox(entity, left, top, width, height) {
+  const fraction = anchorFractions(entity);
+  // The renderer refuses to draw a label half off the frame, so the editor must
+  // not pretend otherwise - that mismatch is what made positions "not stick".
+  const clampedLeft = Math.min(Math.max(0, 1 - width), Math.max(0, left));
+  const clampedTop = Math.min(Math.max(0, 1 - height), Math.max(0, top));
+
+  entity.x = clampedLeft + fraction.x * width;
+  entity.y = clampedTop + fraction.y * height;
 }
 
 function startDrag(entity, event) {
+  const box = entityBox(entity);
+
   draggingEntity.value = entity;
+  dragContext = { width: box.width, height: box.height };
+
   const pointer = pointerToImagePosition(event);
 
   dragOffset.value = pointer
@@ -276,7 +425,47 @@ function startDrag(entity, event) {
 function stopDrag() {
   window.removeEventListener("pointermove", updateEntityPosition);
   draggingEntity.value = null;
+  dragContext = null;
   dragOffset.value = { x: 0, y: 0 };
+  guides.value = [];
+}
+
+/** Arrow keys move by whole image pixels - snapping cannot reach every position. */
+function nudgeEntity(entity, deltaX, deltaY, event) {
+  const step = event.shiftKey ? 10 : 1;
+  const image = previewImage.value;
+  const imageWidth = image?.naturalWidth || 1;
+  const imageHeight = image?.naturalHeight || 1;
+  const box = entityBox(entity);
+
+  applyBox(
+    entity,
+    box.left + (deltaX * step) / imageWidth,
+    box.top + (deltaY * step) / imageHeight,
+    box.width,
+    box.height
+  );
+}
+
+/** Guide overlay geometry, in stage pixels. */
+function guideStyle(guide) {
+  const rect = previewRect.value;
+
+  if (guide.axis === "x") {
+    return {
+      left: `${rect.left + guide.position * rect.width}px`,
+      top: `${rect.top}px`,
+      height: `${rect.height}px`,
+      width: "1px"
+    };
+  }
+
+  return {
+    left: `${rect.left}px`,
+    top: `${rect.top + guide.position * rect.height}px`,
+    width: `${rect.width}px`,
+    height: "1px"
+  };
 }
 
 function addTextEntity() {
@@ -401,6 +590,26 @@ watch(() => props.imageUrl, () => {
 });
 
 watch(() => props.overlays.entities, normalizeEntities, { immediate: true });
+
+/** Keep every label inside the frame after an edit that changed its box size. */
+function reclampEntities() {
+  if (draggingEntity.value) return;
+
+  for (const entity of props.overlays.entities || []) {
+    const box = entityBox(entity);
+
+    if (!box.width || !box.height) continue;
+
+    applyBox(entity, box.left, box.top, box.width, box.height);
+  }
+}
+
+watch(
+  () => (props.overlays.entities || [])
+    .map((entity) => `${entity.text}|${entity.font_size}|${entity.anchor}`)
+    .join(" "),
+  () => requestAnimationFrame(reclampEntities)
+);
 </script>
 
 <template>
@@ -426,17 +635,32 @@ watch(() => props.overlays.entities, normalizeEntities, { immediate: true });
             v-for="entity in enabledEntities"
             v-show="entity.enabled"
             :key="entity.id"
+            :ref="(element) => registerEntityElement(entity.id, element)"
             class="overlay-entity"
             :class="{ selected: entity.id === selectedEntityId }"
             type="button"
             :style="entityStyle(entity)"
             :aria-label="`Move ${entity.label || 'overlay'}`"
             @pointerdown.prevent="selectEntity(entity); startDrag(entity, $event)"
+            @keydown.left.prevent="nudgeEntity(entity, -1, 0, $event)"
+            @keydown.right.prevent="nudgeEntity(entity, 1, 0, $event)"
+            @keydown.up.prevent="nudgeEntity(entity, 0, -1, $event)"
+            @keydown.down.prevent="nudgeEntity(entity, 0, 1, $event)"
           >
             {{ previewText(entity) }}
           </button>
+          <span
+            v-for="guide in guides"
+            :key="`${guide.axis}-${guide.position}`"
+            class="overlay-guide"
+            :style="guideStyle(guide)"
+            aria-hidden="true"
+          />
         </div>
-        <p class="field-hint">Drag any label to reposition it. Values shown are what will render.</p>
+        <p class="field-hint">
+          Drag a label to reposition it - it snaps to the frame and to the other labels.
+          Hold Alt to place it freely, or nudge the selected label with the arrow keys.
+        </p>
       </div>
     </section>
 

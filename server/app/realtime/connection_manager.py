@@ -92,6 +92,9 @@ class ConnectionManager:
             for node in self._nodes.values()
         ]
     
+    def online_node_ids(self) -> list[str]:
+        return [node.node_id for node in self._nodes.values() if node.online and node.websocket]
+
     async def send_to_node(self, node_id: str, message: dict) -> bool:
         node = self._nodes.get(node_id)
 

@@ -67,7 +67,11 @@ def ensure_lightweight_migrations():
             "ADD COLUMN night_interval_seconds INTEGER"
         )
 
-    colour_columns = {
+    added_columns = {
+        "day_max_exposure_ms": "INTEGER DEFAULT 1000",
+        "day_max_gain": "FLOAT DEFAULT 8.0",
+        "night_max_exposure_ms": "INTEGER DEFAULT 30000",
+        "night_max_gain": "FLOAT DEFAULT 16.0",
         "full_resolution": "BOOLEAN NOT NULL DEFAULT 1",
         "day_auto_white_balance": "BOOLEAN NOT NULL DEFAULT 1",
         "day_wb_red": "FLOAT NOT NULL DEFAULT 1.0",
@@ -81,7 +85,7 @@ def ensure_lightweight_migrations():
         "night_hue": "FLOAT NOT NULL DEFAULT 0.0",
     }
 
-    for column_name, column_type in colour_columns.items():
+    for column_name, column_type in added_columns.items():
         if column_name not in columns:
             migrations.append(
                 f"ALTER TABLE node_camera_settings ADD COLUMN {column_name} {column_type}"

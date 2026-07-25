@@ -266,8 +266,20 @@ async def environment_loop(websocket):
         await asyncio.sleep(max(1, settings.environment_interval_seconds))
 
 
-async def capture_sequence_loop(websocket, sequence_id: str, capture_settings: dict[str, Any]):
-    interval_seconds = int(capture_settings.get("interval_seconds", 30))
+def effective_capture_settings(sequence_overrides: dict[str, Any]) -> dict[str, Any]:
+    """The server's current config, with this sequence's own overrides on top.
+
+    Rebuilt for every frame. A running sequence used to keep the settings dict it
+    was started with, so a config update went into `active_capture_settings` and
+    sat there unread: turning auto exposure off, changing the interval, or the
+    day/night switchover all did nothing until capture was stopped and started
+    again.
+    """
+    return {**active_capture_settings, **sequence_overrides}
+
+
+async def capture_sequence_loop(websocket, sequence_id: str, sequence_overrides: dict[str, Any]):
+    capture_settings = effective_capture_settings(sequence_overrides)
     startup_interval_seconds = 1.0
     startup_deadline = asyncio.get_running_loop().time() + 10.0
     startup_stable_frames = 0
@@ -280,8 +292,9 @@ async def capture_sequence_loop(websocket, sequence_id: str, capture_settings: d
     logger.info(
         "sequence.loop.started",
         sequence_id=sequence_id,
-        interval_seconds=interval_seconds,
+        interval_seconds=capture_settings.get("interval_seconds"),
         settings=capture_settings,
+        overrides=sequence_overrides,
     )
 
     try:
@@ -290,6 +303,23 @@ async def capture_sequence_loop(websocket, sequence_id: str, capture_settings: d
 
             if now < next_capture_at:
                 await asyncio.sleep(next_capture_at - now)
+
+            previous_settings = capture_settings
+            capture_settings = effective_capture_settings(sequence_overrides)
+            interval_seconds = int(capture_settings.get("interval_seconds") or 30)
+
+            if capture_settings != previous_settings:
+                logger.info(
+                    "sequence.settings.refreshed",
+                    sequence_id=sequence_id,
+                    period=capture_settings.get("period"),
+                    interval_seconds=interval_seconds,
+                    auto_exposure=capture_settings.get("auto_exposure"),
+                    auto_gain=capture_settings.get("auto_gain"),
+                    exposure_ms=capture_settings.get("exposure_ms"),
+                    max_exposure_ms=capture_settings.get("max_exposure_ms"),
+                    max_gain=capture_settings.get("max_gain"),
+                )
 
             capture_started_at = asyncio.get_running_loop().time()
             active_interval_seconds = (
@@ -445,15 +475,25 @@ async def capture_sequence_loop(websocket, sequence_id: str, capture_settings: d
         )
 
 
-async def start_sequence(websocket, sequence_id: str, capture_settings: dict[str, Any]):
-    global active_sequence_id, active_sequence_task
+async def start_sequence(
+    websocket,
+    sequence_id: str,
+    capture_settings: dict[str, Any],
+    overrides: dict[str, Any] | None = None,
+):
+    global active_capture_settings, active_sequence_id, active_sequence_task
 
     if active_sequence_task is not None and not active_sequence_task.done():
         await stop_sequence(websocket, reason="replaced")
 
-    effective_settings = {
+    # The start message carries the full period profile plus whatever the caller
+    # overrode for this one sequence. Only the overrides belong to the sequence;
+    # the profile is folded into the shared config, so a later config.update -
+    # a settings change, or the day/night switchover - supersedes it.
+    sequence_overrides = dict(overrides or {})
+    active_capture_settings = {
         **active_capture_settings,
-        **capture_settings,
+        **(capture_settings or {}),
     }
 
     await send_json(
@@ -470,7 +510,7 @@ async def start_sequence(websocket, sequence_id: str, capture_settings: dict[str
         capture_sequence_loop(
             websocket=websocket,
             sequence_id=sequence_id,
-            capture_settings=effective_settings,
+            sequence_overrides=sequence_overrides,
         )
     )
 
@@ -502,12 +542,22 @@ async def apply_config_update(websocket, message: dict[str, Any]):
     capture_enabled = bool(message.get("capture_enabled", False))
     desired_sequence_id = message.get("sequence_id")
 
-    if capture_enabled and desired_sequence_id:
+    sequence_running = (
+        active_sequence_task is not None
+        and not active_sequence_task.done()
+        and active_sequence_id == desired_sequence_id
+    )
+
+    if capture_enabled and desired_sequence_id and not sequence_running:
         await start_sequence(
             websocket=websocket,
             sequence_id=desired_sequence_id,
             capture_settings=active_capture_settings,
         )
+
+    # A sequence that is already running needs no restart: its loop rebuilds the
+    # settings from active_capture_settings before every frame, so the update
+    # lands on the next capture instead of discarding the one in flight.
 
     elif not capture_enabled and active_sequence_task is not None and not active_sequence_task.done():
         await stop_sequence(websocket=websocket, reason="config_disabled")
@@ -591,12 +641,14 @@ async def receive_loop(websocket):
                 "sequence.start.received",
                 sequence_id=sequence_id,
                 settings=capture_settings,
+                overrides=message.get("overrides"),
             )
 
             await start_sequence(
                 websocket=websocket,
                 sequence_id=sequence_id,
                 capture_settings=capture_settings,
+                overrides=message.get("overrides"),
             )
 
         elif message_type == "sequence.stop":

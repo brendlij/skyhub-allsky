@@ -119,7 +119,17 @@ class PiCamera2Camera:
         controller = self._sync_controller(settings)
         self._apply_controls(settings, controller)
         requested_controls = self._last_requested_controls or {}
-        self._settle_after_controls(requested_controls, int(settings.get("settle_frames", DEFAULT_SETTLE_FRAMES)))
+
+        # Only wait out the sensor when something actually changed. Every settle
+        # frame costs a full exposure, so on a fixed 60s night exposure blindly
+        # settling doubled the cost of each capture and quietly stretched the
+        # interval; with the controls unchanged the sensor is already there.
+        if self._needs_settle:
+            self._settle_after_controls(
+                requested_controls,
+                int(settings.get("settle_frames", DEFAULT_SETTLE_FRAMES)),
+            )
+            self._needs_settle = False
 
         request = self._picamera2.capture_request()
 
@@ -608,10 +618,11 @@ class PiCamera2Camera:
         self._picamera2.set_controls(controls)
         self._applied_controls = controls
         self._last_requested_controls = dict(controls)
+        # Takes a frame or two to land on the sensor, so the next capture has to
+        # wait for it. A capture that changes nothing does not.
+        self._needs_settle = True
 
         logger.info("picamera2.controls.applied", controls=self._loggable(controls))
-
-        self._needs_settle = False
 
     def _white_balance_controls(self, settings: dict[str, Any]) -> dict[str, Any]:
         # The auto flag wins: gains are always sent alongside it so the manual
