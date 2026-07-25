@@ -1,4 +1,4 @@
-# skyhub
+# skyhub-allsky
 SkyHub is an open-source Allsky application designed to be modular and modern with a flexible server-client structure.
 
 ## Run modes
