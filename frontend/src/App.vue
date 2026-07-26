@@ -2,6 +2,7 @@
 import { RouterView } from "vue-router";
 import AppSidebar from "./components/layout/AppSidebar.vue";
 import AppTopbar from "./components/layout/AppTopbar.vue";
+import ApiKeyDialog from "./components/ui/ApiKeyDialog.vue";
 import ConfirmDialog from "./components/ui/ConfirmDialog.vue";
 import ToastStack from "./components/ui/ToastStack.vue";
 import { useTheme } from "./composables/useTheme";
@@ -22,5 +23,6 @@ const { sidebarCollapsed } = useTheme();
 
     <ToastStack />
     <ConfirmDialog />
+    <ApiKeyDialog />
   </div>
 </template>

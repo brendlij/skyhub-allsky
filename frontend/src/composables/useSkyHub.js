@@ -1,5 +1,5 @@
 import { computed, ref } from "vue";
-import { captureUrl, preloadImage, requestJson } from "../api/skyhub";
+import { captureUrl, preloadImage, requestJson, withApiKey } from "../api/skyhub";
 import { confirmAction } from "./useConfirm";
 import { useToasts } from "./useToasts";
 
@@ -512,7 +512,8 @@ function setHeaterEnabled(enabled) {
 
 function dashboardWebSocketUrl() {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${window.location.host}/ws/dashboard`;
+  // A browser WebSocket cannot send headers, so the key goes in the query.
+  return withApiKey(`${protocol}//${window.location.host}/ws/dashboard`);
 }
 
 function captureMatchesScope(capture) {

@@ -11,6 +11,9 @@ class NodeSettings(BaseSettings):
     node_id: str = "pi-hqcam-01"
     server_ws_base_url: str = "ws://127.0.0.1:8000/ws/nodes"
     server_http_base_url: str | None = None
+    # Must match SKYHUB_SERVER_API_KEY when the server has one set. Empty is fine
+    # against a server without authentication.
+    api_key: str = ""
     camera_driver: str = "mock"
     heartbeat_interval_seconds: int = 10
     reconnect_initial_delay_seconds: float = 1
@@ -50,6 +53,11 @@ class NodeSettings(BaseSettings):
             base_url = base_url.removesuffix("/ws/nodes")
 
         return f"{base_url}/api/captures/upload"
+
+    @property
+    def api_headers(self) -> dict[str, str]:
+        """Auth headers for the server, empty when no key is configured."""
+        return {"X-API-Key": self.api_key} if self.api_key else {}
 
     @property
     def bme280_i2c_address_int(self) -> int:

@@ -11,8 +11,9 @@ from uuid import uuid4
 from astral import LocationInfo
 from astral.sun import sun
 from pydantic import BaseModel, Field
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.openapi.utils import get_openapi
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 import structlog
@@ -29,6 +30,14 @@ from app.repositories.node_environment_repository import NodeEnvironmentReposito
 from app.repositories.node_heater_state_repository import NodeHeaterStateRepository
 from app.repositories.node_overlay_settings_repository import NodeOverlaySettingsRepository
 from app.realtime.connection_manager import ConnectionManager
+from app.security import (
+    API_KEY_HEADER,
+    API_KEY_QUERY,
+    api_key_required,
+    log_startup_state,
+    request_is_authorised,
+    websocket_is_authorised,
+)
 from app.overlays import (
     overlay_presets,
     render_capture_image,
@@ -94,6 +103,7 @@ async def lifespan(app: FastAPI):
         db.close()
 
     logger.info("database.ready")
+    log_startup_state()
     watcher = asyncio.create_task(period_watch_loop())
 
     try:
@@ -107,6 +117,53 @@ app = FastAPI(
     version=settings.app_version,
     lifespan=lifespan,
 )
+
+
+@app.middleware("http")
+async def api_key_middleware(request: Request, call_next):
+    """Guard every /api route in one place.
+
+    A middleware rather than a per-route dependency so a route added later cannot
+    forget it. The frontend, the docs and the static assets stay open - they are
+    just a shell, and every call they make comes back through here anyway.
+    """
+    if request.url.path.startswith("/api") and not request_is_authorised(request):
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Invalid or missing API key"},
+            headers={"WWW-Authenticate": API_KEY_HEADER},
+        )
+
+    return await call_next(request)
+
+
+def openapi_with_security():
+    """Advertise the key in the schema so /docs grows an Authorize button."""
+    if app.openapi_schema:
+        return app.openapi_schema
+
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=(
+            "Camera nodes, captures, telemetry and overlays for a SkyHub allsky "
+            "install. See docs/API.md in the repository for worked examples."
+        ),
+        routes=app.routes,
+    )
+
+    if api_key_required():
+        schema.setdefault("components", {})["securitySchemes"] = {
+            "ApiKeyHeader": {"type": "apiKey", "in": "header", "name": API_KEY_HEADER},
+            "ApiKeyQuery": {"type": "apiKey", "in": "query", "name": API_KEY_QUERY},
+        }
+        schema["security"] = [{"ApiKeyHeader": []}, {"ApiKeyQuery": []}]
+
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = openapi_with_security
 
 if (settings.frontend_dist_dir / "assets").exists():
     app.mount(
@@ -1577,11 +1634,7 @@ async def list_captures(
     }
 
 
-@app.get("/api/captures/latest")
-async def latest_capture(
-    node_id: str | None = None,
-    db: Session = Depends(get_db_session),
-):
+def latest_capture_record(node_id: str | None = None) -> dict | None:
     records = []
 
     for file_path in iter_capture_files() or []:
@@ -1593,10 +1646,55 @@ async def latest_capture(
         records.append(record)
 
     if not records:
-        raise HTTPException(status_code=404, detail="No captures found")
+        return None
 
     records.sort(key=lambda record: record["captured_at"], reverse=True)
-    latest = records[0]
+
+    return records[0]
+
+
+@app.get("/api/captures/current")
+async def current_capture_image(
+    node_id: str | None = None,
+    raw: bool = False,
+    thumb: bool = False,
+):
+    """The newest frame as an image, at a URL that never changes.
+
+    /api/captures/latest describes the frame in JSON, which means a viewer has to
+    make two requests and assemble a path before it can show anything. Anything
+    that just wants a picture - an <img>, a Home Assistant camera, a dashboard
+    tile - wants one stable URL instead.
+    """
+    latest = latest_capture_record(node_id)
+
+    if latest is None:
+        raise HTTPException(status_code=404, detail="No captures found")
+
+    response = capture_file_response(
+        latest["node_id"],
+        latest["archive_date"],
+        latest["period"],
+        latest["filename"],
+        raw=raw,
+        thumb=thumb,
+    )
+    # The URL is stable while the picture behind it is not, so a cached copy would
+    # freeze the view on whichever frame the client saw first.
+    response.headers["Cache-Control"] = "no-store"
+
+    return response
+
+
+@app.get("/api/captures/latest")
+async def latest_capture(
+    node_id: str | None = None,
+    db: Session = Depends(get_db_session),
+):
+    latest = latest_capture_record(node_id)
+
+    if latest is None:
+        raise HTTPException(status_code=404, detail="No captures found")
 
     # Per-frame metadata lives in node_capture_state rather than on disk. Attach it
     # when it belongs to this exact frame, so the dashboard reports the exposure the
@@ -1611,15 +1709,15 @@ async def latest_capture(
     return latest
 
 
-@app.get("/api/captures/{node_id}/{archive_date}/{period}/{filename}")
-async def get_capture_file(
+def capture_file_response(
     node_id: str,
     archive_date: str,
     period: str,
     filename: str,
+    *,
     raw: bool = False,
     thumb: bool = False,
-):
+) -> FileResponse:
     safe_node_id = safe_path_part(node_id)
     safe_archive_date = safe_path_part(archive_date)
     safe_period = safe_path_part(period)
@@ -1659,6 +1757,18 @@ async def get_capture_file(
         media_type="image/jpeg",
         filename=resolved_file_path.name,
     )
+
+
+@app.get("/api/captures/{node_id}/{archive_date}/{period}/{filename}")
+async def get_capture_file(
+    node_id: str,
+    archive_date: str,
+    period: str,
+    filename: str,
+    raw: bool = False,
+    thumb: bool = False,
+):
+    return capture_file_response(node_id, archive_date, period, filename, raw=raw, thumb=thumb)
 
 
 @app.post("/api/captures/upload")
@@ -1813,6 +1923,9 @@ async def upload_capture(
 
 @app.websocket("/ws/nodes/{node_id}")
 async def node_websocket(websocket: WebSocket, node_id: str):
+    if not await websocket_is_authorised(websocket):
+        return
+
     await connections.connect(node_id, websocket)
 
     db = SessionLocal()
@@ -1969,6 +2082,9 @@ async def node_websocket(websocket: WebSocket, node_id: str):
 
 @app.websocket("/ws/dashboard")
 async def dashboard_websocket(websocket: WebSocket):
+    if not await websocket_is_authorised(websocket):
+        return
+
     await connections.connect_dashboard(websocket)
 
     try:

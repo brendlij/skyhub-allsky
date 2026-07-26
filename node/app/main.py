@@ -123,6 +123,7 @@ async def upload_capture(sequence_id: str, capture_result) -> dict[str, Any]:
         with Path(capture_result.file_path).open("rb") as capture_file:
             response = await client.post(
                 node_settings.upload_url,
+                headers=node_settings.api_headers,
                 data=form_data,
                 files={
                     "file": (
@@ -725,7 +726,10 @@ async def run_connection():
         server_url=node_settings.server_ws_url,
     )
 
-    async with websockets.connect(node_settings.server_ws_url) as websocket:
+    async with websockets.connect(
+        node_settings.server_ws_url,
+        additional_headers=node_settings.api_headers,
+    ) as websocket:
         logger.info("node.connected", node_id=node_settings.node_id)
 
         await send_hello(websocket)

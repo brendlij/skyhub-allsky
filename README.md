@@ -53,3 +53,32 @@ SKYHUB_NODE_SERVER_WS_BASE_URL=ws://WINDOWS_IP:8000/ws/nodes \
 SKYHUB_NODE_CAMERA_DRIVER=picamera2 \
 bash scripts/install-node.sh
 ```
+
+## API
+
+Everything the web UI does is available over HTTP, so the server can drive Home
+Assistant, Node-RED or your own scripts. See [docs/API.md](docs/API.md) for the
+full reference, or browse the live schema at `http://<server>:8000/docs`.
+
+Authentication is off by default. To require an API key on every `/api` route and
+both WebSockets, set one on the server and give the same value to each node:
+
+```bash
+SKYHUB_SERVER_API_KEY=pick-something-long-and-random python skyhub.py server
+SKYHUB_NODE_API_KEY=pick-something-long-and-random python skyhub.py node
+```
+
+The web UI asks for the key the first time it gets a 401 and remembers it in that
+browser. Without a key set, the server stays open to anyone who can reach the
+port - fine on a trusted LAN, not for anything reachable from the internet.
+
+To publish the latest image somewhere without handing out that key - which can also
+change settings and stop capture - open up the current image on its own:
+
+```bash
+SKYHUB_SERVER_PUBLIC_CAPTURE_TOKEN=some-shareable-token   # or
+SKYHUB_SERVER_PUBLIC_CAPTURES=true
+```
+
+Either one unlocks `/api/captures/current` and `/api/captures/latest` and nothing
+else - no archive, no telemetry, no settings, no writes.

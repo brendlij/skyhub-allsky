@@ -1,11 +1,55 @@
+import { ref } from "vue";
+
+// The server only demands this when SKYHUB_SERVER_API_KEY is set; an install
+// without one never sees a prompt. Kept in localStorage because there is no
+// login: the key is the whole credential, and it is a LAN tool.
+const API_KEY_STORAGE = "skyhub.api_key";
+
+export const apiKey = ref(localStorage.getItem(API_KEY_STORAGE) || "");
+export const apiKeyRequired = ref(false);
+
+export function setApiKey(value) {
+  const key = String(value || "").trim();
+
+  apiKey.value = key;
+
+  if (key) {
+    localStorage.setItem(API_KEY_STORAGE, key);
+  } else {
+    localStorage.removeItem(API_KEY_STORAGE);
+  }
+}
+
+function authHeaders() {
+  return apiKey.value ? { "X-API-Key": apiKey.value } : {};
+}
+
+/** Append the key to a URL the browser fetches without us: <img>, WebSocket. */
+export function withApiKey(url) {
+  if (!apiKey.value) return url;
+
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}api_key=${encodeURIComponent(apiKey.value)}`;
+}
+
 export async function requestJson(url, options = {}) {
-  const response = await fetch(url, options);
+  const response = await fetch(url, {
+    ...options,
+    headers: { ...authHeaders(), ...(options.headers || {}) }
+  });
+
+  if (response.status === 401) {
+    // Surfaces the key prompt rather than a wall of failed-request toasts.
+    apiKeyRequired.value = true;
+    throw new Error("This server needs an API key");
+  }
 
   if (!response.ok) {
     const text = await response.text();
     throw new Error(text || response.statusText);
   }
 
+  apiKeyRequired.value = false;
   return response.json();
 }
 
@@ -15,6 +59,8 @@ export function captureUrl(capture, options = {}) {
 
   if (options.raw) params.set("raw", "true");
   if (options.thumb) params.set("thumb", "true");
+  // An <img> cannot carry a header, so the key has to ride in the query string.
+  if (apiKey.value) params.set("api_key", apiKey.value);
 
   const query = params.toString();
   return query ? `${url}?${query}` : url;
