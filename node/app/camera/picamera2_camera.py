@@ -30,6 +30,12 @@ ASPECT_TOLERANCE = 0.01
 DEFAULT_DAY_START_EXPOSURE_US = 5_000
 FRAME_DURATION_MARGIN_US = 1_000
 
+# Wall-clock a capture may spend waiting for a control change to reach the sensor
+# before it gives up and keeps the next frame regardless. Long night exposures buy
+# fewer settle frames than short daylight ones - see _settle_frame_budget.
+SETTLE_TIME_BUDGET_US = 30_000_000
+SETTLE_EXPOSURE_TOLERANCE = 0.005
+
 # Cheap luma source for the mean-target controller; decoding the full-resolution
 # main stream every frame just to average it would cost far more.
 METERING_SIZE = (320, 240)
@@ -585,15 +591,15 @@ class PiCamera2Camera:
 
         if exposure_us is not None:
             controls["ExposureTime"] = int(exposure_us)
-            period = str(settings.get("period") or "night")
-
-            if controller is None or controller.mode != MODE_AUTO or period != "day":
-                # Frame duration caps exposure, so long manual or night exposures
-                # still need the limit opened up to match the requested shutter.
-                controls["FrameDurationLimits"] = (
-                    int(exposure_us) + FRAME_DURATION_MARGIN_US,
-                    int(exposure_us) + FRAME_DURATION_MARGIN_US,
-                )
+            # Frame duration caps exposure, so it has to track the requested
+            # shutter - in both directions. Leaving it untouched on the day/auto
+            # path meant the night limit stayed pinned after sunrise: every
+            # daytime frame still took a whole night exposure however short the
+            # shutter was, and since a capture needs settle frames too, a 2ms
+            # daylight frame cost four 50s frames. libcamera clamps the request up
+            # to the sensor's fastest readout, so asking for less is harmless.
+            frame_duration_us = int(exposure_us) + FRAME_DURATION_MARGIN_US
+            controls["FrameDurationLimits"] = (frame_duration_us, frame_duration_us)
 
         if gain is not None:
             controls["AnalogueGain"] = float(gain)
@@ -698,11 +704,29 @@ class PiCamera2Camera:
 
         return self._metering_mask
 
+    def _settle_frame_budget(self, frames: int, exposure_us: Any) -> int:
+        """How many frames settling may spend.
+
+        Every settle frame costs a full exposure, so a fixed count of three is
+        cheap by day and brutal at night: confirming a 50s control had landed
+        cost 150s before the keeper was even started. Past the budget it is
+        better to keep a frame that might still be short - its metadata records
+        what it really used - than to spend minutes proving the point.
+        """
+        budget = max(1, int(frames))
+
+        if not exposure_us:
+            return budget
+
+        affordable = int(SETTLE_TIME_BUDGET_US // max(1, int(exposure_us)))
+
+        return max(1, min(budget, affordable))
+
     def _settle_after_controls(self, requested_controls: dict[str, Any], frames: int) -> None:
         requested_exposure = requested_controls.get("ExposureTime")
         requested_gain = requested_controls.get("AnalogueGain")
         requested_frame_duration_limits = requested_controls.get("FrameDurationLimits")
-        settle_frames = max(3, frames)
+        settle_frames = self._settle_frame_budget(frames, requested_exposure)
 
         for settle_index in range(1, settle_frames + 1):
             request = self._picamera2.capture_request()
@@ -728,10 +752,15 @@ class PiCamera2Camera:
                 ae_enable=metadata.get("AeEnable"),
             )
 
+            # Relative, because the sensor quantises exposure to whole lines: a
+            # flat 100us tolerance is 2ppm of a 50s request, so a control that had
+            # landed perfectly well could still read as a mismatch and burn the
+            # rest of the settle budget.
             exposure_matches = (
                 requested_exposure is None
                 or actual_exposure is None
-                or abs(int(actual_exposure) - int(requested_exposure)) <= 100
+                or abs(int(actual_exposure) - int(requested_exposure))
+                <= max(100, int(requested_exposure) * SETTLE_EXPOSURE_TOLERANCE)
             )
             gain_matches = (
                 requested_gain is None

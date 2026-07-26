@@ -15,6 +15,11 @@ Working in that domain means a correction is a multiplicative change in captured
 light, which is what actually matters, and it lets the controller trade exposure
 against gain afterwards under a single policy: stretch exposure first, only add
 gain (and therefore noise) once exposure is maxed out.
+
+One deliberate departure from upstream: the size of a correction comes from the
+ratio of target to measured mean rather than from allsky's polynomial in their
+absolute difference. See _level_change - the polynomial oscillates instead of
+settling once the loop is anywhere near a bright target.
 """
 
 from dataclasses import dataclass, field
@@ -29,9 +34,10 @@ DEFAULT_NIGHT_MEAN = 0.2
 # around 0.115 - a 43% error. 0.02 settles within 3% and is still wide enough to
 # stop the exposure from twitching frame to frame.
 DEFAULT_MEAN_THRESHOLD = 0.02
-DEFAULT_P0 = 5.0
-DEFAULT_P1 = 20.0
-DEFAULT_P2 = 45.0
+
+# Floor for the measured mean when correcting. A frame that reads as pure black
+# would otherwise ask for an infinite correction.
+MIN_USABLE_MEAN = 1e-4
 
 # One level unit is 2**(1/36) ~= 1.9% more light; the 50-unit clamp caps a single
 # correction at roughly 2.6x so the loop cannot oscillate wildly.
@@ -82,9 +88,6 @@ class MeanTargetController:
     gain: float = 1.0
     shutter_steps: float = SHUTTER_STEPS
     history_size: int = HISTORY_SIZE
-    p0: float = DEFAULT_P0
-    p1: float = DEFAULT_P1
-    p2: float = DEFAULT_P2
 
     def __post_init__(self):
         self.reset(self.exposure_us, self.gain)
@@ -95,7 +98,6 @@ class MeanTargetController:
         self._level = self._exposure_level(self.exposure_us, self.gain)
         self._mean_history: list[float] = [self.target_mean] * self.history_size
         self._count = 0
-        self._fast_forward = False
         self._last_mean: float | None = None
         self._level_min, self._level_max = self._level_bounds()
 
@@ -190,51 +192,34 @@ class MeanTargetController:
         predicted_mean += forecast * self.history_size
         predicted_mean /= weights_total
 
-        change = self._exposure_change(
-            predicted_diff=abs(predicted_mean - self.target_mean),
-            measured_diff=abs(measured_mean - self.target_mean),
-        )
-
-        if measured_mean < self.target_mean - self.threshold:
-            if self.gain < self.limits.max_gain or self.exposure_us < self.limits.max_exposure_us:
-                self._level += change
-        elif measured_mean > self.target_mean + self.threshold:
-            if self.gain > self.limits.min_gain or self.exposure_us > self.limits.min_exposure_us:
-                self._level -= change
+        if abs(measured_mean - self.target_mean) > self.threshold:
+            self._level += self._level_change(predicted_mean)
 
         self._level = max(self._level_min, min(self._level_max, self._level))
-        self._update_fast_forward(index, previous_index)
         self._apply_level()
         self._count += 1
 
         return self.state
 
-    def _exposure_change(self, predicted_diff: float, measured_diff: float) -> int:
-        # Three gears: the further the mean is from target, the more aggressively
-        # the polynomial ramps, so recovery is fast but settling stays gentle.
-        if self._fast_forward or measured_diff > self.threshold * 1.75:
-            change = self.p0 + self.p1 * predicted_diff + (self.p2 * predicted_diff) ** 2.0
-        elif measured_diff > self.threshold * 1.25:
-            change = self.p0 + self.p1 * predicted_diff + ((self.p2 * predicted_diff) ** 2.0) / 2.0
-        elif measured_diff > self.threshold:
-            change = self.p0 + self.p1 * predicted_diff
-        else:
-            return int(self.shutter_steps / 2)
+    def _level_change(self, predicted_mean: float) -> int:
+        """How many level units to move to reach the target.
 
-        return int(min(MAX_EXPOSURE_CHANGE, max(1.0, change)))
+        Brightness scales with captured light, so the correction is the *ratio* of
+        target to measured, which the level domain expresses directly as its
+        logarithm. allsky's original polynomial ramps on the absolute difference of
+        the two means instead, and in a multiplicative domain that is the wrong
+        shape: it asks for the same correction whether the frame needs halving or
+        quartering, so around a bright target the loop steps straight past it and
+        settles into a permanent two-frame oscillation - one blown frame, one dark
+        frame, forever - instead of converging.
 
-    def _update_fast_forward(self, index: int, previous_index: int) -> None:
-        if self._level in (self._level_min, self._level_max):
-            self._fast_forward = True
-            return
+        Being proportional to the log error, this shrinks as the target is
+        approached, which is what makes it settle instead of ringing.
+        """
+        ratio = self.target_mean / max(MIN_USABLE_MEAN, predicted_mean)
+        change = math.log2(ratio) * self.shutter_steps ** 2
 
-        settled = (
-            abs(self._mean_history[index] - self.target_mean) < self.threshold
-            and abs(self._mean_history[previous_index] - self.target_mean) < self.threshold
-        )
-
-        if self._fast_forward and settled:
-            self._fast_forward = False
+        return int(max(-MAX_EXPOSURE_CHANGE, min(MAX_EXPOSURE_CHANGE, change)))
 
     def _apply_level(self) -> None:
         effective_us = self._effective_exposure_us(self._level)
