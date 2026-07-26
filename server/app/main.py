@@ -13,7 +13,7 @@ from astral.sun import sun
 from pydantic import BaseModel, Field
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 import structlog
@@ -1655,6 +1655,7 @@ def latest_capture_record(node_id: str | None = None) -> dict | None:
 
 @app.get("/api/captures/current")
 async def current_capture_image(
+    request: Request,
     node_id: str | None = None,
     raw: bool = False,
     thumb: bool = False,
@@ -1665,11 +1666,29 @@ async def current_capture_image(
     make two requests and assemble a path before it can show anything. Anything
     that just wants a picture - an <img>, a Home Assistant camera, a dashboard
     tile - wants one stable URL instead.
+
+    Conditional: a client that polls gets 304 and no body until the frame actually
+    changes, so checking every few seconds costs a couple of hundred bytes rather
+    than re-sending two megabytes of sky.
     """
     latest = latest_capture_record(node_id)
 
     if latest is None:
         raise HTTPException(status_code=404, detail="No captures found")
+
+    # The filename identifies the frame - a new capture is always a new name - so
+    # it doubles as the validator without hashing or stat-ing anything.
+    variant = "raw" if raw else "thumb" if thumb else "rendered"
+    etag = f'W/"{latest["filename"]}-{variant}"'
+    if_none_match = request.headers.get("if-none-match") or ""
+
+    # no-cache rather than no-store: the client may keep the frame, it just has to
+    # revalidate before reusing it. no-store would forbid the copy that makes a 304
+    # possible, and the URL outlives the picture behind it.
+    headers = {"ETag": etag, "Cache-Control": "no-cache"}
+
+    if etag in {tag.strip() for tag in if_none_match.split(",")}:
+        return Response(status_code=304, headers=headers)
 
     response = capture_file_response(
         latest["node_id"],
@@ -1679,9 +1698,7 @@ async def current_capture_image(
         raw=raw,
         thumb=thumb,
     )
-    # The URL is stable while the picture behind it is not, so a cached copy would
-    # freeze the view on whichever frame the client saw first.
-    response.headers["Cache-Control"] = "no-store"
+    response.headers.update(headers)
 
     return response
 

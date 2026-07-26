@@ -175,8 +175,20 @@ http://skyhub.local:8000/api/captures/current
 | `?raw=true` | The original, before overlays and hue correction |
 | `?api_key=…` | For clients that cannot send a header, like `<img>` |
 
-Sent with `Cache-Control: no-store`, because the URL stays the same while the
-picture behind it does not. `404` until the first capture exists.
+`404` until the first capture exists.
+
+**Polling is cheap.** The response carries an `ETag` and `Cache-Control: no-cache`,
+so a client that sends the tag back gets `304 Not Modified` with an empty body until
+the frame actually changes:
+
+```bash
+curl -sI -H 'If-None-Match: W/"cap_..._49b090f2.jpg-rendered"' \
+  http://skyhub.local:8000/api/captures/current      # 304, 0 bytes
+```
+
+Browsers and Home Assistant do this on their own. Checking every 10s costs a couple
+of hundred bytes per check instead of re-sending the whole image, so there is no
+need to match the poll interval to the capture interval.
 
 This is one of the two routes that can be opened up without handing out the full
 API key — see [Sharing the image without sharing control](#sharing-the-image-without-sharing-control).
@@ -466,6 +478,35 @@ asyncio.run(watch())
 
 `ws://<server>:8000/ws/nodes/{node_id}` is the node protocol. It is not an
 integration surface — connecting to it impersonates a camera node.
+
+### A live view without polling
+
+The image itself is not pushed over the WebSocket, and deliberately so: a capture is
+1–2 MB, and shipping it as binary frames would give up HTTP caching, conditional
+requests, range requests and the browser's own image loading, while forcing a full
+copy on every connected viewer whether or not their tab is even visible.
+
+Use the event as the trigger and let HTTP move the bytes. `capture.uploaded` fires
+the moment a frame is stored, so a viewer updates with no polling at all:
+
+```html
+<img id="sky" src="/api/captures/current">
+<script>
+  const socket = new WebSocket(`ws://${location.host}/ws/dashboard`);
+
+  socket.onmessage = (message) => {
+    const event = JSON.parse(message.data);
+    if (event.type !== "capture.uploaded") return;
+
+    // Cache-busting is not needed - the ETag changes with the frame - but this
+    // also gives you the metadata for free.
+    document.getElementById("sky").src = "/api/captures/current?t=" + Date.now();
+  };
+</script>
+```
+
+That is the best of both: instant updates, no polling, and the image still travels
+as a plain cacheable HTTP response.
 
 ---
 

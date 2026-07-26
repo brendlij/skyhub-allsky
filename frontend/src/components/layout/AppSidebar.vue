@@ -19,7 +19,7 @@ const links = [
 <template>
   <aside class="sidebar">
     <RouterLink class="sidebar-brand" to="/monitor">
-      <span class="sidebar-mark" aria-hidden="true">S</span>
+      <img class="sidebar-logo" src="/allskylogo.svg" alt="SkyHub logo" />
       <span class="sidebar-brand-text">
         <strong>SkyHub</strong>
         <small>Allsky console</small>
@@ -54,6 +54,12 @@ const links = [
 </template>
 
 <style scoped>
+.sidebar-logo {
+  width: 28px;
+  height: 28px;
+  flex: none;
+}
+
 .sidebar-footer-row {
   display: flex;
   align-items: center;
