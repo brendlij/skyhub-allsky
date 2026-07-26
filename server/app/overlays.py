@@ -108,19 +108,23 @@ VARIABLE_CATALOG: tuple[VariableSpec, ...] = (
 
 # One-click starting layouts. Templates use the same tokens the editor inserts, so
 # a preset is just a normal overlay the user can pick apart afterwards.
+#
+# Font sizes are in source-image pixels, and an allsky frame is several thousand
+# pixels wide, so labels have to be around 100px to be legible once the frame is
+# scaled down to a screen or a timelapse.
 OVERLAY_PRESETS: tuple[dict, ...] = (
     {
         "id": "allsky_standard",
         "name": "Standard allsky",
         "description": "Timestamp, exposure, conditions and moon in the four corners.",
         "entities": [
-            {"anchor": "top-left", "x": 0.02, "y": 0.02, "font_size": 34,
+            {"anchor": "top-left", "x": 0.02, "y": 0.02, "font_size": 112,
              "text": "$capture.datetime"},
-            {"anchor": "top-right", "x": 0.98, "y": 0.02, "font_size": 30,
+            {"anchor": "top-right", "x": 0.98, "y": 0.02, "font_size": 100,
              "text": "Exp $exposure.time  ISO$exposure.iso"},
-            {"anchor": "bottom-left", "x": 0.02, "y": 0.98, "font_size": 28,
+            {"anchor": "bottom-left", "x": 0.02, "y": 0.98, "font_size": 96,
              "text": "Temp $bme280.temperature °C  Humidity $bme280.humidity %  Dew $bme280.dew_point °C"},
-            {"anchor": "bottom-right", "x": 0.98, "y": 0.98, "font_size": 28,
+            {"anchor": "bottom-right", "x": 0.98, "y": 0.98, "font_size": 96,
              "text": "Moon $moon.phase_name $moon.illumination %  Sun $sun.elevation °"},
         ],
     },
@@ -129,7 +133,7 @@ OVERLAY_PRESETS: tuple[dict, ...] = (
         "name": "Minimal",
         "description": "Just the timestamp and node name.",
         "entities": [
-            {"anchor": "bottom-left", "x": 0.02, "y": 0.98, "font_size": 30,
+            {"anchor": "bottom-left", "x": 0.02, "y": 0.98, "font_size": 104,
              "text": "$capture.datetime  $node.id"},
         ],
     },
@@ -138,13 +142,13 @@ OVERLAY_PRESETS: tuple[dict, ...] = (
         "name": "Diagnostic",
         "description": "Everything useful for tuning exposure and colour.",
         "entities": [
-            {"anchor": "top-left", "x": 0.02, "y": 0.02, "font_size": 28,
+            {"anchor": "top-left", "x": 0.02, "y": 0.02, "font_size": 100,
              "text": "$capture.datetime  $capture.period  $node.id"},
-            {"anchor": "top-right", "x": 0.98, "y": 0.02, "font_size": 26,
+            {"anchor": "top-right", "x": 0.98, "y": 0.02, "font_size": 92,
              "text": "Exp $exposure.time  Gain $exposure.gain  ISO$exposure.iso"},
-            {"anchor": "bottom-right", "x": 0.98, "y": 0.98, "font_size": 26,
+            {"anchor": "bottom-right", "x": 0.98, "y": 0.98, "font_size": 92,
              "text": "Mean $exposure.mean / Target $exposure.target_mean  WB $sensor.colour_gains"},
-            {"anchor": "bottom-left", "x": 0.02, "y": 0.98, "font_size": 26,
+            {"anchor": "bottom-left", "x": 0.02, "y": 0.98, "font_size": 92,
              "text": "Sensor $sensor.temperature °C  $sensor.lux lux  $image.size  $image.filesize"},
         ],
     },
@@ -157,6 +161,7 @@ def overlay_presets() -> list[dict]:
             "id": preset["id"],
             "name": preset["name"],
             "description": preset["description"],
+            "builtin": True,
             "entities": [dict(entity) for entity in preset["entities"]],
         }
         for preset in OVERLAY_PRESETS

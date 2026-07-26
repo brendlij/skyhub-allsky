@@ -10,6 +10,8 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# Font sizes are in source-image pixels. An allsky frame is thousands of pixels
+# wide, so a 30px label is invisible once the frame is viewed at any sane size.
 def default_overlay_entities() -> list[dict[str, Any]]:
     return [
         {
@@ -20,7 +22,7 @@ def default_overlay_entities() -> list[dict[str, Any]]:
             "x": 0.035,
             "y": 0.055,
             "anchor": "top-left",
-            "font_size": 32,
+            "font_size": 108,
             "color": "#ffffff",
             "background": "#000000",
             "background_opacity": 0.45,
@@ -34,7 +36,7 @@ def default_overlay_entities() -> list[dict[str, Any]]:
             "x": 0.035,
             "y": 0.925,
             "anchor": "bottom-left",
-            "font_size": 28,
+            "font_size": 96,
             "color": "#ffffff",
             "background": "#000000",
             "background_opacity": 0.35,
@@ -48,7 +50,7 @@ def default_overlay_entities() -> list[dict[str, Any]]:
             "x": 0.965,
             "y": 0.055,
             "anchor": "top-right",
-            "font_size": 24,
+            "font_size": 88,
             "color": "#ffffff",
             "background": "#000000",
             "background_opacity": 0.35,

@@ -32,6 +32,26 @@ export function withApiKey(url) {
   return `${url}${separator}api_key=${encodeURIComponent(apiKey.value)}`;
 }
 
+/* FastAPI reports failures as {"detail": "…"}. Showing the raw JSON in a toast
+ * makes a perfectly clear message look like a crash. */
+function errorMessage(text) {
+  if (!text) return "";
+
+  try {
+    const parsed = JSON.parse(text);
+    const detail = parsed?.detail;
+
+    if (typeof detail === "string") return detail;
+    // Validation errors come back as a list of {loc, msg, …}.
+    if (Array.isArray(detail)) return detail.map((item) => item.msg).filter(Boolean).join(", ");
+
+  } catch {
+    // Not JSON - the body is the message.
+  }
+
+  return text;
+}
+
 export async function requestJson(url, options = {}) {
   const response = await fetch(url, {
     ...options,
@@ -46,10 +66,14 @@ export async function requestJson(url, options = {}) {
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(text || response.statusText);
+    throw new Error(errorMessage(text) || response.statusText);
   }
 
   apiKeyRequired.value = false;
+
+  // A 204 (delete) has no body, and response.json() would throw on it.
+  if (response.status === 204) return null;
+
   return response.json();
 }
 

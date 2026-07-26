@@ -11,14 +11,14 @@ button,
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
-  min-height: 30px;
+  min-height: 34px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 0 11px;
+  padding: 0 13px;
   background: var(--surface-raised);
   color: var(--text);
   font-family: inherit;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   line-height: 1;
   white-space: nowrap;
@@ -79,15 +79,15 @@ button.ghost:hover:not(:disabled) {
 }
 
 button.icon {
-  width: 30px;
-  min-height: 30px;
+  width: 34px;
+  min-height: 34px;
   padding: 0;
 }
 
 button.sm {
-  min-height: 24px;
-  padding: 0 8px;
-  font-size: 12px;
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 13px;
 }
 
 button.active {
@@ -108,12 +108,12 @@ button.active {
 }
 
 .segmented button {
-  min-height: 24px;
+  min-height: 28px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-muted);
-  font-size: 12.5px;
+  font-size: 13.5px;
 }
 
 .segmented button:hover:not(:disabled) {
@@ -129,7 +129,7 @@ button.active {
 /* ---------- Fields ---------- */
 
 label {
-  font-size: 12.5px;
+  font-size: 13.5px;
   font-weight: 500;
 }
 
@@ -137,21 +137,21 @@ input,
 select,
 textarea {
   width: 100%;
-  min-height: 30px;
+  min-height: 34px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 6px 9px;
+  padding: 7px 10px;
   background: var(--surface-inset);
   color: var(--text);
   font-family: inherit;
-  font-size: 13px;
+  font-size: 14px;
   transition: border-color var(--transition), box-shadow var(--transition);
 }
 
 textarea {
-  min-height: 62px;
+  min-height: 68px;
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: 13.5px;
   line-height: 1.5;
   resize: vertical;
 }
@@ -193,16 +193,16 @@ select {
 }
 
 input[type="checkbox"] {
-  width: 15px;
-  min-height: 15px;
-  height: 15px;
+  width: 16px;
+  min-height: 16px;
+  height: 16px;
   flex: none;
   accent-color: var(--accent);
   cursor: pointer;
 }
 
 input[type="color"] {
-  height: 30px;
+  height: 34px;
   padding: 3px;
   cursor: pointer;
 }
@@ -228,13 +228,13 @@ input[type="range"] {
   align-items: baseline;
   gap: 6px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
 }
 
 .field-hint {
   color: var(--text-faint);
-  font-size: 11.5px;
+  font-size: 12.5px;
   line-height: 1.45;
 }
 
@@ -244,14 +244,14 @@ input[type="range"] {
   margin-left: auto;
   color: var(--text);
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 12.5px;
   font-weight: 500;
 }
 
 .field-unit {
   color: var(--text-faint);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 450;
 }
 
@@ -260,7 +260,7 @@ input[type="range"] {
   align-items: center;
   gap: 8px;
   cursor: pointer;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 450;
 }
 
@@ -322,7 +322,7 @@ fieldset:disabled {
 
 .panel-title-note {
   color: var(--text-faint);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 450;
 }
 
@@ -362,7 +362,7 @@ fieldset:disabled {
   align-items: center;
   gap: var(--space-2);
   color: var(--text);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 550;
 }
 
@@ -379,8 +379,8 @@ fieldset:disabled {
   align-items: baseline;
   justify-content: space-between;
   gap: var(--space-4);
-  padding: 7px 0;
-  font-size: 13px;
+  padding: 9px 0;
+  font-size: 14px;
 }
 
 .data-row + .data-row {
@@ -407,7 +407,7 @@ fieldset:disabled {
 .data-value.mono,
 .data-row dd.mono {
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: 13.5px;
 }
 
 .data-value.success { color: var(--success); }
@@ -423,10 +423,10 @@ fieldset:disabled {
   gap: 5px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 1px 6px;
+  padding: 2px 7px;
   background: transparent;
   color: var(--text-muted);
-  font-size: 11.5px;
+  font-size: 12.5px;
   font-weight: 500;
   white-space: nowrap;
 }
@@ -462,7 +462,7 @@ fieldset:disabled {
 table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: 14px;
 }
 
 th {
@@ -472,7 +472,7 @@ th {
   padding: 8px var(--space-4);
   background: var(--bg);
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
   text-align: left;
 }
@@ -504,20 +504,20 @@ tbody tr:hover td {
 
 .empty-state .empty-icon {
   color: var(--text-faint);
-  font-size: 22px;
+  font-size: 24px;
   line-height: 1;
 }
 
 .empty-state strong {
   color: var(--text);
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 550;
 }
 
 .empty-state p {
-  max-width: 44ch;
+  max-width: 48ch;
   color: var(--text-faint);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .skeleton {
@@ -545,8 +545,8 @@ tbody tr:hover td {
   gap: var(--space-2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 8px 10px;
-  font-size: 12.5px;
+  padding: 9px 11px;
+  font-size: 13.5px;
   line-height: 1.5;
 }
 
@@ -558,5 +558,5 @@ tbody tr:hover td {
   border-radius: 3px;
   padding: 1px 5px;
   background: #0003;
-  font-size: 11.5px;
+  font-size: 12.5px;
 }

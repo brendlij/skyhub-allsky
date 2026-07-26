@@ -399,7 +399,7 @@ The text burned into saved captures.
   "enabled": true,
   "entities": [
     {"id": "overlay-datetime", "type": "text", "label": "Date + time", "enabled": true,
-     "x": 0.035, "y": 0.055, "anchor": "top-left", "font_size": 32,
+     "x": 0.035, "y": 0.055, "anchor": "top-left", "font_size": 108,
      "color": "#ffffff", "background": "#000000", "background_opacity": 0.45,
      "text": "$capture.datetime"}
   ]
@@ -408,6 +408,8 @@ The text burned into saved captures.
 
 `x`/`y` are fractions of the image (0–1) locating the box's `anchor` corner.
 `text` is a template; `$`-prefixed tokens are substituted at render time.
+`font_size` is in source-image pixels, so on a multi-megapixel allsky frame a
+readable label is around 100 — not the 12–16 of screen typography.
 
 `PUT` returns the saved settings plus `warnings` listing any tokens that will render
 as empty text — worth checking rather than wondering why a label is blank.
@@ -422,6 +424,70 @@ This is the authoritative list — the editor builds its picker from it.
                 "snippet": "Exp $exposure.time", "value": "50s", "live": true}],
  "presets": [...], "has_live_values": true}
 ```
+
+### `GET /api/overlays/presets`
+
+Built-in layouts followed by saved ones. `builtin: true` marks the three that live
+in code and cannot be deleted.
+
+```json
+{"presets": [{"id": "minimal", "name": "Minimal", "description": "…",
+              "builtin": true, "entities": [...]}]}
+```
+
+### `POST /api/overlays/presets`
+
+Saves the current layout as a reusable preset. Presets are server-wide, not
+per-node — the point is applying one to the next camera you set up.
+
+```json
+{"name": "My layout", "description": "", "overwrite": false, "entities": [...]}
+```
+
+Entities are stored without their `id`: the editor mints fresh ones each time the
+preset is applied. `409` if the name is taken; repeat with `"overwrite": true` to
+replace that preset's layout.
+
+### `DELETE /api/overlays/presets/{preset_id}`
+
+`204` on success, `404` for an unknown id or a built-in preset. Overlays already
+applied to a node are untouched.
+
+---
+
+## Mask
+
+A per-node PNG laid over every capture: opaque pixels are painted onto the frame,
+transparent pixels are left alone. For blacking out a roof, a street lamp, or the
+corners outside a fisheye circle.
+
+The mask is composited **before the original is filed away**, so it covers the raw
+copy, the rendered capture and the thumbnail alike. What it hides is not recoverable
+from the server. A mask whose size differs from the frame is scaled to fit.
+
+### `GET /api/nodes/{node_id}/mask`
+
+```json
+{"node_id": "allsky-01", "exists": true, "width": 4056, "height": 3040,
+ "size_bytes": 84213, "updated_at": "2026-07-26T18:15:30+00:00"}
+```
+
+`{"node_id": "…", "exists": false}` when there is none.
+
+### `GET /api/nodes/{node_id}/mask/image`
+
+The PNG itself, `no-store` so a re-upload is never served from cache. `404` when
+the node has no mask.
+
+### `POST /api/nodes/{node_id}/mask`
+
+Multipart `file`. Must be a PNG (transparency is the whole point) with at least
+one transparent pixel, at most 32 MB. Returns the same shape as `GET`. `400` with
+a readable `detail` on anything else.
+
+### `DELETE /api/nodes/{node_id}/mask`
+
+Removes it; captures already masked keep their masking. `404` when there is none.
 
 ---
 
@@ -453,6 +519,7 @@ JSON messages. With authentication on, pass `?api_key=…` (browsers) or an
 | `capture.state.updated` | Capture started or stopped | `capture_enabled`, `sequence_id` |
 | `settings.updated` | Camera settings changed | `settings` |
 | `overlay.updated` | Overlays changed | `overlays` |
+| `mask.updated` | A mask was uploaded or removed | `mask` |
 | `environment.updated` | New sensor reading | `environment` |
 | `heater.updated` | Heater state changed | `heater` |
 | `device.settings.updated`, `device.configured` | Hardware config changed or was applied | `device_settings` |

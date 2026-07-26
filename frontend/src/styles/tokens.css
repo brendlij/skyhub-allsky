@@ -14,19 +14,20 @@
  */
 
 :root {
-  /* Neutral ramp with a trace of cool so it sits under the image without tinting it. */
-  --grey-950: #08090a;
-  --grey-900: #0d0e11;
-  --grey-850: #121317;
-  --grey-800: #17181c;
-  --grey-750: #1d1f24;
-  --grey-700: #26282e;
-  --grey-600: #3a3d44;
-  --grey-500: #6b6f78;
-  --grey-400: #90949c;
-  --grey-300: #b2b6be;
-  --grey-200: #d1d4d9;
-  --grey-100: #e8eaed;
+  /* Neutral grey ramp. The dark end sits at charcoal rather than black: a pure
+   * black shell makes the sky image look washed out and the whole page harsh. */
+  --grey-950: #141518;
+  --grey-900: #17181b;
+  --grey-850: #1c1d21;
+  --grey-800: #212226;
+  --grey-750: #26272c;
+  --grey-700: #2d2e34;
+  --grey-600: #3d4046;
+  --grey-500: #7b7e85;
+  --grey-400: #a4a7ad;
+  --grey-300: #c3c6cb;
+  --grey-200: #d9dbdf;
+  --grey-100: #eceef0;
   --grey-050: #f7f8f9;
 
   --accent-400: #60a5fa;
@@ -57,10 +58,10 @@
   --space-6: 32px;
   --space-7: 48px;
 
-  --sidebar-width: 212px;
-  --sidebar-width-collapsed: 56px;
-  --topbar-height: 52px;
-  --rail-width: 300px;
+  --sidebar-width: 236px;
+  --sidebar-width-collapsed: 60px;
+  --topbar-height: 58px;
+  --rail-width: 336px;
 
   --transition: 120ms cubic-bezier(0.4, 0, 0.2, 1);
 
@@ -73,21 +74,21 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  --bg: var(--grey-950);
+  --bg: var(--grey-900);
   --bg-subtle: var(--grey-950);
-  --surface: var(--grey-900);
-  --surface-raised: var(--grey-850);
-  --surface-hover: var(--grey-800);
-  --surface-active: var(--grey-750);
-  --surface-inset: #0b0c0e;
+  --surface: var(--grey-850);
+  --surface-raised: var(--grey-800);
+  --surface-hover: var(--grey-750);
+  --surface-active: var(--grey-700);
+  --surface-inset: var(--grey-950);
 
-  --border: #1e2024;
-  --border-strong: #2e3138;
-  --border-subtle: #16171a;
+  --border: #2c2e33;
+  --border-strong: #3d4046;
+  --border-subtle: #232428;
 
-  --text: #ededf0;
-  --text-muted: #9a9ea6;
-  --text-faint: #6b6f77;
+  --text: #f0f1f2;
+  --text-muted: var(--grey-400);
+  --text-faint: var(--grey-500);
   --text-inverse: var(--grey-950);
 
   --accent: var(--accent-400);
@@ -107,7 +108,9 @@
   --shadow: 0 2px 8px #00000059;
   --shadow-lg: 0 16px 40px #000000a6;
 
-  --image-backdrop: #000000;
+  /* The photo stage stays darker than the shell so the frame reads as the
+   * brightest thing on the page — just not pure black. */
+  --image-backdrop: #0e0f11;
   --overlay-panel: #0a0b0dcc;
   --overlay-border: #ffffff1f;
   --overlay-text: #f2f3f5;
