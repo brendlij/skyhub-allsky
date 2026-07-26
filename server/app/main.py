@@ -1756,6 +1756,10 @@ def capture_file_response(
         resolved_file_path,
         media_type="image/jpeg",
         filename=resolved_file_path.name,
+        # Starlette pairs a filename with "attachment" unless told otherwise, which
+        # makes a browser download the capture instead of showing it. Inline keeps
+        # the nice filename for "save image as" while the URL still just displays.
+        content_disposition_type="inline",
     )
 
 
