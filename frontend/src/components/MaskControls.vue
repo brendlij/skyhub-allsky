@@ -63,7 +63,13 @@ async function uploadMask(event) {
     });
 
     version.value = Date.now();
-    notify("Mask saved — it applies to captures from here on");
+    // Say how the file was read: a mask that was interpreted the other way round
+    // is the one mistake that looks like the feature is broken.
+    notify(
+      mask.value.mode === "black-and-white"
+        ? "Mask saved — read as black and white, white kept. Applies from the next capture."
+        : "Mask saved — read by transparency, transparent kept. Applies from the next capture."
+    );
 
   } catch (error) {
     notifyError(error);
@@ -112,9 +118,10 @@ async function removeMask() {
 
     <div class="panel-body">
       <p class="field-hint">
-        A PNG the shape of the frame: opaque pixels are painted over the capture,
-        transparent pixels are left alone. Use it to black out a roof, a street
-        lamp, or the corners outside a fisheye circle.
+        A PNG the shape of the frame, marking what to black out — a roof, a street
+        lamp, the corners outside a fisheye circle. Draw it either way: with
+        transparency, where transparent is kept and opaque is covered, or flat
+        black and white, where white is kept and black is covered.
       </p>
 
       <div class="mask-preview">

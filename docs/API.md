@@ -457,9 +457,17 @@ applied to a node are untouched.
 
 ## Mask
 
-A per-node PNG laid over every capture: opaque pixels are painted onto the frame,
-transparent pixels are left alone. For blacking out a roof, a street lamp, or the
-corners outside a fisheye circle.
+A per-node PNG marking what to black out on every capture — a roof, a street lamp,
+the corners outside a fisheye circle. Two accepted drawings:
+
+| Mask | Kept | Covered |
+|---|---|---|
+| Carries transparency | transparent pixels | opaque pixels |
+| Flat black and white | white | black (grey covers partially) |
+
+A PNG with any transparency is read by its alpha; a fully opaque one is read by
+its brightness. Uploads are normalised to an alpha mask, and the response says
+which reading was used via `mode` (`"transparency"` or `"black-and-white"`).
 
 The mask is composited **before the original is filed away**, so it covers the raw
 copy, the rendered capture and the thumbnail alike. What it hides is not recoverable
@@ -481,9 +489,9 @@ the node has no mask.
 
 ### `POST /api/nodes/{node_id}/mask`
 
-Multipart `file`. Must be a PNG (transparency is the whole point) with at least
-one transparent pixel, at most 32 MB. Returns the same shape as `GET`. `400` with
-a readable `detail` on anything else.
+Multipart `file`, PNG, at most 32 MB. Returns the `GET` shape plus `mode`. `400`
+with a readable `detail` when the file is not a PNG, or when the drawing says
+nothing — covering the whole frame, or covering none of it.
 
 ### `DELETE /api/nodes/{node_id}/mask`
 

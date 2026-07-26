@@ -44,34 +44,6 @@
   border-radius: 0;
 }
 
-/* One translucent panel in a corner instead of telemetry scattered over the sky. */
-.stage-overlay {
-  position: absolute;
-  bottom: var(--space-3);
-  left: var(--space-3);
-  display: grid;
-  gap: 1px;
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--radius);
-  padding: 7px 11px;
-  background: var(--overlay-panel);
-  backdrop-filter: blur(8px);
-  pointer-events: none;
-}
-
-.stage-overlay strong {
-  color: var(--overlay-text);
-  font-size: 14px;
-  font-variant-numeric: tabular-nums;
-  font-weight: 550;
-  letter-spacing: -0.01em;
-}
-
-.stage-overlay span {
-  color: var(--overlay-text-muted);
-  font-size: 12.5px;
-}
-
 .stage-caption {
   color: var(--text-faint);
   font-family: var(--font-mono);

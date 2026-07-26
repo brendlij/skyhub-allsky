@@ -1,7 +1,7 @@
 <script setup>
 import { computed } from "vue";
 import EmptyState from "../components/ui/EmptyState.vue";
-import { formatBytes, formatDateTime } from "../api/skyhub";
+import { formatDateTime } from "../api/skyhub";
 import { useSkyHub } from "../composables/useSkyHub";
 
 const {
@@ -97,20 +97,6 @@ const exposure = computed(() => {
   return { time, gain: gains.join(" · ") || null };
 });
 
-// One line of frame facts for the overlay panel — everything else about the
-// capture lives in the rail.
-const frameSummary = computed(() => {
-  const capture = latest.value;
-  if (!capture) return "";
-
-  return [
-    capture.period,
-    capture.width && capture.height ? `${capture.width}×${capture.height}` : null,
-    formatBytes(capture.size_bytes)
-  ]
-    .filter(Boolean)
-    .join(" · ");
-});
 </script>
 
 <template>
@@ -134,10 +120,6 @@ const frameSummary = computed(() => {
           message="The first uploaded frame appears here as soon as a sequence runs."
         />
 
-        <div v-if="latest && latestImageUrl" class="stage-overlay">
-          <strong>{{ formatDateTime(latest.captured_at) }}</strong>
-          <span>{{ frameSummary }}</span>
-        </div>
       </div>
 
       <p v-if="latest" class="stage-caption truncate" :title="latest.filename">
