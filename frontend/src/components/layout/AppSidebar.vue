@@ -22,7 +22,6 @@ const links = [
       <img class="sidebar-logo" src="/allskylogo.svg" alt="SkyHub logo" />
       <span class="sidebar-brand-text">
         <strong>SkyHub</strong>
-        <small>Allsky console</small>
       </span>
     </RouterLink>
 
@@ -30,7 +29,7 @@ const links = [
       <RouterLink v-for="link in links" :key="link.to" :to="link.to" :title="link.label">
         <span class="nav-icon" aria-hidden="true">{{ link.icon }}</span>
         <span>{{ link.label }}</span>
-        <span v-if="link.to === '/nodes' && nodes.length" class="badge nav-badge">
+        <span v-if="link.to === '/nodes' && nodes.length" class="nav-count">
           {{ nodes.filter((node) => node.online).length }}/{{ nodes.length }}
         </span>
       </RouterLink>
@@ -55,8 +54,8 @@ const links = [
 
 <style scoped>
 .sidebar-logo {
-  width: 28px;
-  height: 28px;
+  width: 22px;
+  height: 22px;
   flex: none;
 }
 

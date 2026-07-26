@@ -2,51 +2,116 @@
 
 /* ---------- Monitor ---------- */
 
-.monitor-grid {
+/* The image is the page. Everything else is a 300px column of text beside it. */
+.monitor {
   display: grid;
   align-items: start;
-  gap: var(--space-4);
-  grid-template-columns: minmax(0, 2.1fr) minmax(280px, 1fr);
+  gap: var(--space-6);
+  grid-template-columns: minmax(0, 1fr) var(--rail-width);
 }
 
-.monitor-tiles {
+.stage {
   display: grid;
   gap: var(--space-3);
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  min-width: 0;
 }
 
 .image-frame {
+  position: relative;
   display: grid;
+  overflow: hidden;
   place-items: center;
-  min-height: 340px;
-  border-radius: var(--radius);
+  min-height: 380px;
+  border-radius: var(--radius-lg);
+  /* Only paint the black stage when there is a frame to stage. An empty or
+   * loading state on black is unreadable in the light theme. */
+  background: var(--surface-inset);
+}
+
+.image-frame:has(img) {
   background: var(--image-backdrop);
 }
 
 .image-frame img {
   width: 100%;
-  max-height: min(72vh, 780px);
-  border-radius: var(--radius);
+  max-height: min(78vh, 900px);
   object-fit: contain;
 }
 
-.capture-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2) var(--space-4);
-  color: var(--text-muted);
-  font-size: 12px;
+.stage-skeleton {
+  width: 100%;
+  height: 380px;
+  border-radius: 0;
 }
 
-.capture-meta strong {
-  color: var(--text);
-  font-family: var(--font-mono);
+/* One translucent panel in a corner instead of telemetry scattered over the sky. */
+.stage-overlay {
+  position: absolute;
+  bottom: var(--space-3);
+  left: var(--space-3);
+  display: grid;
+  gap: 1px;
+  border: 1px solid var(--overlay-border);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  background: var(--overlay-panel);
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+}
+
+.stage-overlay strong {
+  color: var(--overlay-text);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
   font-weight: 550;
+  letter-spacing: -0.01em;
+}
+
+.stage-overlay span {
+  color: var(--overlay-text-muted);
+  font-size: 11.5px;
+}
+
+.stage-caption {
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.rail {
+  position: sticky;
+  top: 0;
+  display: grid;
+  align-content: start;
+  gap: var(--space-5);
+}
+
+.rail-group {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.rail-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.rail-empty {
+  padding: 7px 0;
+  color: var(--text-faint);
+  font-size: 12.5px;
 }
 
 @media (max-width: 1180px) {
-  .monitor-grid {
+  .monitor {
+    gap: var(--space-5);
     grid-template-columns: 1fr;
+  }
+
+  .rail {
+    position: static;
   }
 }
 
@@ -88,13 +153,14 @@
 }
 
 .date-item.active {
-  border-color: var(--accent);
+  border-color: transparent;
   background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .date-item strong {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 550;
 }
 
 .date-item small {
@@ -104,7 +170,7 @@
 }
 
 .date-item.active small {
-  color: var(--accent);
+  color: inherit;
 }
 
 .capture-grid {
@@ -129,7 +195,7 @@
 }
 
 .capture-tile:hover {
-  border-color: var(--accent);
+  border-color: var(--border-strong);
   background: var(--surface-raised);
 }
 
@@ -280,17 +346,17 @@
 }
 
 .storage-item span {
-  color: var(--text-faint);
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 450;
 }
 
 .storage-item strong {
   font-family: var(--font-mono);
-  font-size: 15px;
+  font-size: 16px;
   font-variant-numeric: tabular-nums;
+  font-weight: 550;
+  letter-spacing: -0.01em;
 }
 
 .meter {
@@ -320,11 +386,9 @@
   justify-content: space-between;
   gap: var(--space-3);
   flex-wrap: wrap;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: var(--space-3) var(--space-4);
-  background: var(--surface-raised);
-  box-shadow: var(--shadow);
+  border-top: 1px solid var(--border);
+  padding: var(--space-3) 0;
+  background: var(--bg);
 }
 
 /* ---------- Colour controls ---------- */
@@ -381,7 +445,6 @@
 
 .node-card.active {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
 }
 
 .node-card-head {
@@ -513,12 +576,10 @@
 }
 
 .overlay-variable-group h4 {
-  margin-bottom: 5px;
-  color: var(--text-faint);
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  margin-bottom: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .overlay-variables {

@@ -17,14 +17,14 @@ const {
 const route = useRoute();
 
 const TITLES = {
-  "/monitor": ["Monitor", "Live view and node telemetry"],
-  "/captures": ["Captures", "Browse the archive by night"],
-  "/overlays": ["Overlays", "Text burned into saved captures"],
-  "/settings": ["Settings", "Camera, colour, hardware and storage"],
-  "/nodes": ["Nodes", "Connected camera nodes"]
+  "/monitor": "Monitor",
+  "/captures": "Captures",
+  "/overlays": "Overlays",
+  "/settings": "Settings",
+  "/nodes": "Nodes"
 };
 
-const pageTitle = computed(() => TITLES[route.path] || ["SkyHub", ""]);
+const pageTitle = computed(() => TITLES[route.path] || "SkyHub");
 
 const CONNECTION = {
   live: { label: "Live", tone: "success", pulse: true },
@@ -46,24 +46,15 @@ const currentNode = computed({
 <template>
   <header class="topbar">
     <div class="topbar-title">
-      <strong>{{ pageTitle[0] }}</strong>
-      <small>{{ pageTitle[1] }}</small>
+      <strong>{{ pageTitle }}</strong>
     </div>
 
     <span class="topbar-spacer" />
 
     <div class="topbar-group">
+      <!-- Connection and capture state read as one sentence rather than two pills. -->
       <span
-        class="badge"
-        :class="capturing ? 'accent' : ''"
-        :title="capturing ? 'Node is running a capture sequence' : 'No capture sequence running'"
-      >
-        <span class="dot" :class="{ pulse: capturing }" />
-        {{ capturing ? "Capturing" : "Idle" }}
-      </span>
-
-      <span
-        class="badge"
+        class="status-line"
         :class="connection.tone"
         :title="`Dashboard websocket: ${connection.label.toLowerCase()}`"
       >
@@ -71,22 +62,26 @@ const currentNode = computed({
         {{ connection.label }}
       </span>
 
+      <span
+        class="status-line"
+        :title="capturing ? 'Node is running a capture sequence' : 'No capture sequence running'"
+      >
+        {{ capturing ? "Capturing" : "Idle" }}
+      </span>
+
       <label v-if="nodes.length" class="node-picker">
-        <span>Node</span>
+        <!-- The node's own online state lives on the picker, so it needs no badge. -->
+        <span
+          class="dot"
+          :style="{ color: selectedNode?.online ? 'var(--success)' : 'var(--danger)' }"
+          :title="selectedNode?.online ? 'Node online' : 'Node offline'"
+        />
         <select v-model="currentNode" aria-label="Selected node">
           <option v-for="node in nodes" :key="node.node_id" :value="node.node_id">
             {{ node.node_id }}{{ node.online ? "" : " (offline)" }}
           </option>
         </select>
       </label>
-
-      <span
-        v-if="selectedNode"
-        class="badge"
-        :class="selectedNode.online ? 'success' : 'danger'"
-      >
-        {{ selectedNode.online ? "online" : "offline" }}
-      </span>
 
       <button
         type="button"
