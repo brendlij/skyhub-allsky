@@ -66,7 +66,7 @@ function onKeydown(event) {
   width: min(420px, 100%);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: var(--space-5);
+  padding: var(--space-6);
   background: var(--surface-raised);
   box-shadow: var(--shadow-lg);
 }

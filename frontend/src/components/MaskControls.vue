@@ -203,7 +203,7 @@ async function removeMask() {
 }
 
 .mask-preview-empty {
-  padding: var(--space-6);
+  padding: var(--space-7);
   color: var(--text-faint);
   font-size: 13.5px;
   text-align: center;

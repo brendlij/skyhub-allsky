@@ -16,6 +16,34 @@ body,
   height: 100%;
 }
 
+/* dvh tracks the browser chrome as it hides and shows, which is the difference
+ * between a bottom bar that stays put and one that jumps on every scroll. */
+@supports (height: 100dvh) {
+  html,
+  body,
+  #app {
+    height: 100dvh;
+  }
+}
+
+body {
+  /* No rubber-band bounce past the ends of the page: it exposes the background
+   * behind a fixed bottom bar and reads as a broken web page rather than an app. */
+  overscroll-behavior-y: none;
+  /* Sideways is never a scroll direction here. */
+  overflow-x: hidden;
+}
+
+/* A double-tap that zooms the page instead of the image is the single most
+ * app-breaking touch behaviour, and it comes from the browser, not the code. */
+button,
+a,
+label,
+summary,
+[role="button"] {
+  touch-action: manipulation;
+}
+
 body {
   background: var(--bg);
   color: var(--text);
@@ -142,7 +170,7 @@ video {
 }
 
 .stack { display: grid; gap: var(--space-3); }
-.stack-lg { display: grid; gap: var(--space-5); }
+.stack-lg { display: grid; gap: var(--space-6); }
 .block { display: flex; width: 100%; }
 .row { display: flex; align-items: center; gap: var(--space-2); }
 .row-between { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }

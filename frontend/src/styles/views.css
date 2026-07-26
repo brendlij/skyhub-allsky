@@ -6,7 +6,7 @@
 .monitor {
   display: grid;
   align-items: start;
-  gap: var(--space-6);
+  gap: var(--space-7);
   grid-template-columns: minmax(0, 1fr) var(--rail-width);
 }
 
@@ -55,7 +55,7 @@
   top: 0;
   display: grid;
   align-content: start;
-  gap: var(--space-5);
+  gap: var(--space-6);
 }
 
 .rail-group {
@@ -78,7 +78,7 @@
 
 @media (max-width: 1180px) {
   .monitor {
-    gap: var(--space-5);
+    gap: var(--space-6);
     grid-template-columns: 1fr;
   }
 
@@ -148,7 +148,7 @@
 .capture-grid {
   display: grid;
   gap: var(--space-3);
-  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(210px, 100%), 1fr));
   padding: var(--space-4);
 }
 
@@ -203,6 +203,74 @@
   flex-wrap: wrap;
   border-bottom: 1px solid var(--border-subtle);
   padding: var(--space-3) var(--space-4);
+}
+
+/* ---------- Captures on a phone ----------
+ *
+ * The date rail becomes a horizontal strip above the grid, and the grid becomes
+ * two columns of rounded cards. Below 1024px the page also loses the desktop
+ * page head, which the app bar already covers. */
+
+@media (max-width: 1023.98px) {
+  .capture-browser {
+    gap: var(--space-4);
+    grid-template-columns: 1fr;
+  }
+
+  .capture-browser > .panel {
+    border-radius: var(--radius-card);
+  }
+
+  .date-list {
+    display: flex;
+    overflow-x: auto;
+    max-height: none;
+    padding: var(--space-3);
+    gap: var(--space-2);
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .date-item {
+    flex: none;
+    min-height: var(--tap-target);
+    scroll-snap-align: start;
+    white-space: nowrap;
+  }
+
+  .capture-grid {
+    gap: var(--space-3);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: var(--space-3);
+  }
+
+  .capture-tile {
+    border-radius: var(--radius-card);
+  }
+
+  .capture-tile img {
+    aspect-ratio: 1 / 1;
+  }
+
+  .capture-tile-meta {
+    padding: var(--space-2) var(--space-3) var(--space-3);
+  }
+
+  .capture-toolbar {
+    padding: var(--space-3);
+  }
+
+  .capture-toolbar .segmented button {
+    min-height: 36px;
+    padding: 0 var(--space-4);
+  }
+}
+
+/* One column is unreadable below 360px; three fits from a large phone up. */
+@media (min-width: 600px) and (max-width: 1023.98px) {
+  .capture-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 /* ---------- Lightbox ---------- */
@@ -281,7 +349,7 @@
   display: grid;
   align-items: start;
   gap: var(--space-4);
-  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(400px, 100%), 1fr));
 }
 
 .settings-note {
@@ -403,7 +471,7 @@
 .node-cards {
   display: grid;
   gap: var(--space-3);
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr));
 }
 
 .node-card {
@@ -518,7 +586,7 @@
 }
 
 .overlay-placeholder {
-  padding: var(--space-6);
+  padding: var(--space-7);
   color: var(--text-faint);
   font-size: 13.5px;
   text-align: center;

@@ -133,7 +133,7 @@
   gap: var(--space-3);
   grid-area: topbar;
   border-bottom: 1px solid var(--border);
-  padding: 0 var(--space-5);
+  padding: 0 var(--space-6);
   background: color-mix(in srgb, var(--bg) 85%, transparent);
   backdrop-filter: blur(8px);
 }
@@ -193,12 +193,12 @@
 .workspace {
   overflow-y: auto;
   grid-area: main;
-  padding: var(--space-5);
+  padding: var(--space-6);
 }
 
 .workspace-inner {
   display: grid;
-  gap: var(--space-5);
+  gap: var(--space-6);
   max-width: 1840px;
   margin: 0 auto;
 }
@@ -232,9 +232,93 @@
   flex-wrap: wrap;
 }
 
-/* ---------- Responsive ---------- */
+/* ---------- Mobile shell ---------- */
 
-@media (max-width: 1000px) {
+/* Below 1024px the desktop chrome is not rendered at all - see App.vue. This is
+ * the shell that replaces it: a sticky app bar, a scrolling workspace, and a
+ * fixed bottom navigation. */
+
+.shell-mobile {
+  display: grid;
+  height: 100%;
+  grid-template-rows: auto 1fr;
+  /* Insets on the sides for landscape on a notched phone. */
+  padding-right: var(--safe-right);
+  padding-left: var(--safe-left);
+}
+
+.workspace-mobile {
+  position: relative;
+  display: grid;
+  overflow-y: auto;
+  align-content: start;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-4)
+    calc(var(--bottom-nav-total) + var(--space-6));
+  /* The bottom bar is fixed, so the page has to end above it rather than under it. */
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Pull to refresh: only the indicator moves. */
+.pull-indicator {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: var(--radius-full);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  box-shadow: var(--shadow);
+  font-size: 15px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.pull-indicator.active {
+  animation: spin 900ms linear infinite;
+}
+
+@keyframes spin {
+  to { transform: translate3d(-50%, 72px, 0) rotate(360deg); }
+}
+
+/* Route changes get a short cross-fade with a hint of travel, which is what
+ * makes a tab bar feel like an app rather than a set of links. */
+.page-enter-active,
+.page-leave-active {
+  transition: opacity var(--motion-fast), transform var(--motion-fast);
+}
+
+.page-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+.page-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-enter-active,
+  .page-leave-active {
+    transition: none;
+  }
+
+  .pull-indicator.active {
+    animation: none;
+  }
+}
+
+/* ---------- Responsive (desktop only) ---------- */
+
+/* The desktop shell exists from 1024px up, so its narrow variant is the tablet
+ * range just above the mobile cut-off. */
+@media (min-width: 1024px) and (max-width: 1200px) {
   .shell,
   .shell.collapsed {
     grid-template-columns: var(--sidebar-width-collapsed) 1fr;
@@ -253,23 +337,5 @@
 
   .workspace {
     padding: var(--space-4);
-  }
-}
-
-@media (max-width: 760px) {
-  .topbar {
-    padding: 0 var(--space-4);
-  }
-
-  .topbar-title {
-    display: none;
-  }
-
-  .topbar-group {
-    gap: var(--space-3);
-  }
-
-  .workspace {
-    padding: var(--space-4) var(--space-3);
   }
 }
