@@ -92,7 +92,17 @@ const LONG_PRESS_MS = 450;
 let gesture = null;
 let longPressTimer = null;
 
+// The action buttons sit on top of the frame, so their pointer events bubble
+// into the gesture handler. Without this, pressing Stop also reads as a tap on
+// the image and opens the viewer behind the sheet. click.stop does not help:
+// pointerdown/up fire long before the click ever exists.
+function fromControl(event) {
+  return Boolean(event.target?.closest?.("button, a, input, select"));
+}
+
 function onPointerDown(event) {
+  if (fromControl(event)) return;
+
   gesture = { x: event.clientX, y: event.clientY, moved: false };
 
   longPressTimer = window.setTimeout(() => {
@@ -115,7 +125,7 @@ function onPointerMove(event) {
 function onPointerUp(event) {
   window.clearTimeout(longPressTimer);
 
-  if (!gesture || gesture.handled) {
+  if (fromControl(event) || !gesture || gesture.handled) {
     gesture = null;
     return;
   }

@@ -508,7 +508,19 @@ class PiCamera2Camera:
         return self._controller
 
     def _controller_seed(self, settings: dict[str, Any], period: str) -> tuple[int, float]:
-        last_metadata = self._last_frame_metadata if self._last_capture_period == period else None
+        # Dusk is continuous: the light a second after the period flips is the light
+        # a second before it, so the last day frame is the best starting point the
+        # night controller can have - far better than the configured night exposure,
+        # which is written for the middle of the night and costs several blown
+        # frames to climb down from. Dawn is not symmetric: the last night frame is
+        # many stops too long for daylight, so the day path keeps its own saved seed
+        # and only carries over within its own period.
+        #
+        # This only ever seeds a controller, and a controller only exists when the
+        # period is on auto. A fixed night exposure is applied directly and never
+        # reaches this.
+        carries_over = self._last_capture_period == period or period == "night"
+        last_metadata = self._last_frame_metadata if carries_over else None
         seed_exposure_us: int | None = None
         seed_gain: float | None = None
 
