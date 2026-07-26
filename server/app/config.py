@@ -48,6 +48,10 @@ class ServerSettings(BaseSettings):
         return self.data_dir / "thumbnails"
 
     @property
+    def masks_dir(self) -> Path:
+        return self.data_dir / "masks"
+
+    @property
     def frontend_dist_dir(self) -> Path:
         return REPO_ROOT / "frontend" / "dist"
 

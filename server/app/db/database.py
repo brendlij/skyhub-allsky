@@ -106,4 +106,4 @@ def get_db_session():
     finally:
         db.close()
 
-from app.models import capture_storage_settings, node, node_camera_settings, node_capture_state, node_device_settings, node_environment, node_heater_state, node_overlay_settings  # noqa: F401
+from app.models import capture_storage_settings, node, node_camera_settings, node_capture_state, node_device_settings, node_environment, node_heater_state, node_overlay_settings, overlay_preset  # noqa: F401

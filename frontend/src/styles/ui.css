@@ -1,4 +1,7 @@
-/* Reusable primitives: buttons, fields, panels, badges, tables. */
+/* Reusable primitives: buttons, fields, panels, badges, tables.
+ *
+ * House rule: a border has to earn its place. Most grouping here is done with
+ * spacing and a single hairline separator instead of a boxed container. */
 
 /* ---------- Buttons ---------- */
 
@@ -11,12 +14,12 @@ button,
   min-height: 34px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 0 12px;
+  padding: 0 13px;
   background: var(--surface-raised);
   color: var(--text);
   font-family: inherit;
-  font-size: 13px;
-  font-weight: 550;
+  font-size: 14px;
+  font-weight: 500;
   line-height: 1;
   white-space: nowrap;
   cursor: pointer;
@@ -44,6 +47,7 @@ button.primary {
   border-color: transparent;
   background: var(--accent);
   color: var(--accent-text);
+  font-weight: 550;
 }
 
 button.primary:hover:not(:disabled) {
@@ -52,8 +56,8 @@ button.primary:hover:not(:disabled) {
 }
 
 button.danger {
-  border-color: var(--danger-soft);
-  background: var(--danger-soft);
+  border-color: var(--border);
+  background: var(--surface-raised);
   color: var(--danger);
 }
 
@@ -81,15 +85,15 @@ button.icon {
 }
 
 button.sm {
-  min-height: 27px;
-  padding: 0 9px;
-  font-size: 12px;
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 13px;
 }
 
 button.active {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  color: var(--accent);
+  border-color: var(--border-strong);
+  background: var(--surface-active);
+  color: var(--text);
 }
 
 /* ---------- Segmented control ---------- */
@@ -104,12 +108,12 @@ button.active {
 }
 
 .segmented button {
-  min-height: 27px;
+  min-height: 28px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-muted);
-  font-size: 12.5px;
+  font-size: 13.5px;
 }
 
 .segmented button:hover:not(:disabled) {
@@ -118,16 +122,15 @@ button.active {
 }
 
 .segmented button.active {
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-sm);
+  background: var(--surface-active);
   color: var(--text);
 }
 
 /* ---------- Fields ---------- */
 
 label {
-  font-size: 12.5px;
-  font-weight: 550;
+  font-size: 13.5px;
+  font-weight: 500;
 }
 
 input,
@@ -141,14 +144,14 @@ textarea {
   background: var(--surface-inset);
   color: var(--text);
   font-family: inherit;
-  font-size: 13px;
+  font-size: 14px;
   transition: border-color var(--transition), box-shadow var(--transition);
 }
 
 textarea {
-  min-height: 62px;
+  min-height: 68px;
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: 13.5px;
   line-height: 1.5;
   resize: vertical;
 }
@@ -181,11 +184,11 @@ textarea::placeholder {
 
 select {
   appearance: none;
-  padding-right: 30px;
+  padding-right: 28px;
   background-image: linear-gradient(45deg, transparent 50%, currentcolor 50%),
     linear-gradient(135deg, currentcolor 50%, transparent 50%);
-  background-position: calc(100% - 15px) calc(50% + 1px), calc(100% - 10px) calc(50% + 1px);
-  background-size: 5px 5px, 5px 5px;
+  background-position: calc(100% - 14px) calc(50% + 1px), calc(100% - 10px) calc(50% + 1px);
+  background-size: 4px 4px, 4px 4px;
   background-repeat: no-repeat;
 }
 
@@ -205,7 +208,7 @@ input[type="color"] {
 }
 
 input[type="range"] {
-  height: 22px;
+  height: 20px;
   min-height: 0;
   padding: 0;
   border: 0;
@@ -225,13 +228,13 @@ input[type="range"] {
   align-items: baseline;
   gap: 6px;
   color: var(--text-muted);
-  font-size: 12px;
-  font-weight: 550;
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .field-hint {
   color: var(--text-faint);
-  font-size: 11px;
+  font-size: 12.5px;
   line-height: 1.45;
 }
 
@@ -241,14 +244,14 @@ input[type="range"] {
   margin-left: auto;
   color: var(--text);
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 12.5px;
   font-weight: 500;
 }
 
 .field-unit {
   color: var(--text-faint);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 450;
 }
 
@@ -257,8 +260,8 @@ input[type="range"] {
   align-items: center;
   gap: 8px;
   cursor: pointer;
-  font-size: 13px;
-  font-weight: 500;
+  font-size: 14px;
+  font-weight: 450;
 }
 
 fieldset {
@@ -274,7 +277,7 @@ fieldset:disabled {
 .field-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
-  gap: var(--space-3);
+  gap: var(--space-4);
 }
 
 /* ---------- Panels ---------- */
@@ -288,6 +291,13 @@ fieldset:disabled {
   background: var(--surface);
 }
 
+/* Borderless variant: the same content grouping with spacing instead of a box. */
+.panel.plain {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
 .panel-header {
   display: flex;
   flex: none;
@@ -296,6 +306,11 @@ fieldset:disabled {
   gap: var(--space-3);
   border-bottom: 1px solid var(--border-subtle);
   padding: var(--space-3) var(--space-4);
+}
+
+.panel.plain > .panel-header {
+  border-bottom: 0;
+  padding: 0 0 var(--space-2);
 }
 
 .panel-header h2,
@@ -307,7 +322,7 @@ fieldset:disabled {
 
 .panel-title-note {
   color: var(--text-faint);
-  font-size: 11.5px;
+  font-size: 13px;
   font-weight: 450;
 }
 
@@ -315,6 +330,10 @@ fieldset:disabled {
   display: grid;
   gap: var(--space-4);
   padding: var(--space-4);
+}
+
+.panel.plain > .panel-body {
+  padding: 0;
 }
 
 .panel-body.flush {
@@ -329,7 +348,6 @@ fieldset:disabled {
   gap: var(--space-2);
   border-top: 1px solid var(--border-subtle);
   padding: var(--space-3) var(--space-4);
-  background: var(--bg-subtle);
 }
 
 .section {
@@ -337,23 +355,65 @@ fieldset:disabled {
   gap: var(--space-3);
 }
 
+/* Sentence case, no rule, no tracking games — a section title is a heading, not
+ * a legal notice. */
 .section-title {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 550;
 }
 
-.section-title::after {
-  height: 1px;
-  flex: 1;
-  background: var(--border-subtle);
-  content: "";
+/* ---------- Definition rows ---------- */
+
+/* The workhorse group: label left, value right, hairline between rows. Replaces
+ * a card per metric. */
+.data-list {
+  display: grid;
 }
+
+.data-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: 9px 0;
+  font-size: 14px;
+}
+
+.data-row + .data-row {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.data-row dt,
+.data-row .data-label {
+  color: var(--text-muted);
+  font-weight: 450;
+  white-space: nowrap;
+}
+
+.data-row dd,
+.data-row .data-value {
+  margin: 0;
+  min-width: 0;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.data-value.mono,
+.data-row dd.mono {
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+}
+
+.data-value.success { color: var(--success); }
+.data-value.warning { color: var(--warning); }
+.data-value.danger { color: var(--danger); }
+.data-value.faint { color: var(--text-faint); }
 
 /* ---------- Badges & status ---------- */
 
@@ -362,13 +422,12 @@ fieldset:disabled {
   align-items: center;
   gap: 5px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  padding: 2px 9px;
-  background: var(--surface-raised);
+  border-radius: var(--radius-sm);
+  padding: 2px 7px;
+  background: transparent;
   color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
+  font-size: 12.5px;
+  font-weight: 500;
   white-space: nowrap;
 }
 
@@ -378,8 +437,8 @@ fieldset:disabled {
 .badge.accent  { border-color: transparent; background: var(--accent-soft);  color: var(--accent); }
 
 .dot {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   flex: none;
   border-radius: var(--radius-full);
   background: currentcolor;
@@ -403,21 +462,19 @@ fieldset:disabled {
 table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12.5px;
+  font-size: 14px;
 }
 
 th {
   position: sticky;
   top: 0;
   border-bottom: 1px solid var(--border);
-  padding: 9px var(--space-4);
-  background: var(--bg-subtle);
+  padding: 8px var(--space-4);
+  background: var(--bg);
   color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.04em;
+  font-size: 13px;
+  font-weight: 500;
   text-align: left;
-  text-transform: uppercase;
 }
 
 td {
@@ -447,19 +504,20 @@ tbody tr:hover td {
 
 .empty-state .empty-icon {
   color: var(--text-faint);
-  font-size: 26px;
+  font-size: 24px;
   line-height: 1;
 }
 
 .empty-state strong {
   color: var(--text);
-  font-size: 14px;
+  font-size: 15px;
+  font-weight: 550;
 }
 
 .empty-state p {
-  max-width: 42ch;
+  max-width: 48ch;
   color: var(--text-faint);
-  font-size: 12.5px;
+  font-size: 14px;
 }
 
 .skeleton {
@@ -488,7 +546,7 @@ tbody tr:hover td {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 9px 11px;
-  font-size: 12px;
+  font-size: 13.5px;
   line-height: 1.5;
 }
 
@@ -500,5 +558,5 @@ tbody tr:hover td {
   border-radius: 3px;
   padding: 1px 5px;
   background: #0003;
-  font-size: 11px;
+  font-size: 12.5px;
 }

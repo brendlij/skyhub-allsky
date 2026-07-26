@@ -2,51 +2,88 @@
 
 /* ---------- Monitor ---------- */
 
-.monitor-grid {
+/* The image is the page. Everything else is one column of text beside it. */
+.monitor {
   display: grid;
   align-items: start;
-  gap: var(--space-4);
-  grid-template-columns: minmax(0, 2.1fr) minmax(280px, 1fr);
+  gap: var(--space-6);
+  grid-template-columns: minmax(0, 1fr) var(--rail-width);
 }
 
-.monitor-tiles {
+.stage {
   display: grid;
   gap: var(--space-3);
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  min-width: 0;
 }
 
 .image-frame {
+  position: relative;
   display: grid;
+  overflow: hidden;
   place-items: center;
-  min-height: 340px;
-  border-radius: var(--radius);
+  min-height: 380px;
+  border-radius: var(--radius-lg);
+  /* Only paint the black stage when there is a frame to stage. An empty or
+   * loading state on black is unreadable in the light theme. */
+  background: var(--surface-inset);
+}
+
+.image-frame:has(img) {
   background: var(--image-backdrop);
 }
 
 .image-frame img {
   width: 100%;
-  max-height: min(72vh, 780px);
-  border-radius: var(--radius);
+  max-height: min(78vh, 900px);
   object-fit: contain;
 }
 
-.capture-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2) var(--space-4);
-  color: var(--text-muted);
-  font-size: 12px;
+.stage-skeleton {
+  width: 100%;
+  height: 380px;
+  border-radius: 0;
 }
 
-.capture-meta strong {
-  color: var(--text);
+.stage-caption {
+  color: var(--text-faint);
   font-family: var(--font-mono);
-  font-weight: 550;
+  font-size: 12.5px;
+}
+
+.rail {
+  position: sticky;
+  top: 0;
+  display: grid;
+  align-content: start;
+  gap: var(--space-5);
+}
+
+.rail-group {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.rail-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.rail-empty {
+  padding: 9px 0;
+  color: var(--text-faint);
+  font-size: 13.5px;
 }
 
 @media (max-width: 1180px) {
-  .monitor-grid {
+  .monitor {
+    gap: var(--space-5);
     grid-template-columns: 1fr;
+  }
+
+  .rail {
+    position: static;
   }
 }
 
@@ -56,7 +93,7 @@
   display: grid;
   align-items: start;
   gap: var(--space-4);
-  grid-template-columns: minmax(210px, 260px) minmax(0, 1fr);
+  grid-template-columns: minmax(230px, 280px) minmax(0, 1fr);
 }
 
 .date-list {
@@ -77,7 +114,7 @@
   justify-content: start;
   border: 1px solid transparent;
   border-radius: var(--radius);
-  padding: 8px 10px;
+  padding: 9px 11px;
   background: transparent;
   text-align: left;
 }
@@ -88,29 +125,30 @@
 }
 
 .date-item.active {
-  border-color: var(--accent);
+  border-color: transparent;
   background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .date-item strong {
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 14px;
+  font-weight: 550;
 }
 
 .date-item small {
   color: var(--text-faint);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .date-item.active small {
-  color: var(--accent);
+  color: inherit;
 }
 
 .capture-grid {
   display: grid;
   gap: var(--space-3);
-  grid-template-columns: repeat(auto-fill, minmax(184px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
   padding: var(--space-4);
 }
 
@@ -129,7 +167,7 @@
 }
 
 .capture-tile:hover {
-  border-color: var(--accent);
+  border-color: var(--border-strong);
   background: var(--surface-raised);
 }
 
@@ -148,13 +186,13 @@
 
 .capture-tile-meta strong {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
 }
 
 .capture-tile-meta small {
   color: var(--text-faint);
-  font-size: 10.5px;
+  font-size: 12px;
 }
 
 .capture-toolbar {
@@ -199,12 +237,12 @@
 
 .lightbox-header-text strong {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .lightbox-header-text small {
   color: var(--text-faint);
-  font-size: 11px;
+  font-size: 12.5px;
 }
 
 .lightbox-stage {
@@ -243,13 +281,13 @@
   display: grid;
   align-items: start;
   gap: var(--space-4);
-  grid-template-columns: repeat(auto-fit, minmax(370px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
 }
 
 .settings-note {
   grid-column: 1 / -1;
   color: var(--text-faint);
-  font-size: 11.5px;
+  font-size: 12.5px;
   line-height: 1.45;
 }
 
@@ -270,8 +308,8 @@
 
 .storage-grid {
   display: grid;
-  gap: var(--space-3);
-  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(146px, 1fr));
 }
 
 .storage-item {
@@ -280,17 +318,17 @@
 }
 
 .storage-item span {
-  color: var(--text-faint);
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 450;
 }
 
 .storage-item strong {
   font-family: var(--font-mono);
-  font-size: 15px;
+  font-size: 18px;
   font-variant-numeric: tabular-nums;
+  font-weight: 550;
+  letter-spacing: -0.01em;
 }
 
 .meter {
@@ -320,11 +358,9 @@
   justify-content: space-between;
   gap: var(--space-3);
   flex-wrap: wrap;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: var(--space-3) var(--space-4);
-  background: var(--surface-raised);
-  box-shadow: var(--shadow);
+  border-top: 1px solid var(--border);
+  padding: var(--space-3) 0;
+  background: var(--bg);
 }
 
 /* ---------- Colour controls ---------- */
@@ -367,7 +403,7 @@
 .node-cards {
   display: grid;
   gap: var(--space-3);
-  grid-template-columns: repeat(auto-fill, minmax(268px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
 }
 
 .node-card {
@@ -381,7 +417,6 @@
 
 .node-card.active {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
 }
 
 .node-card-head {
@@ -393,14 +428,14 @@
 
 .node-card-head strong {
   font-family: var(--font-mono);
-  font-size: 14px;
+  font-size: 15px;
 }
 
 .node-card dl {
   display: grid;
-  gap: 5px;
+  gap: 6px;
   grid-template-columns: auto 1fr;
-  font-size: 12px;
+  font-size: 13.5px;
 }
 
 .node-card dt {
@@ -426,7 +461,7 @@
   display: grid;
   align-items: start;
   gap: var(--space-4);
-  grid-template-columns: minmax(0, 1.5fr) minmax(300px, 1fr);
+  grid-template-columns: minmax(0, 1.5fr) minmax(340px, 1fr);
 }
 
 .overlay-stage {
@@ -485,7 +520,7 @@
 .overlay-placeholder {
   padding: var(--space-6);
   color: var(--text-faint);
-  font-size: 12.5px;
+  font-size: 13.5px;
   text-align: center;
 }
 
@@ -493,7 +528,7 @@
   display: grid;
   overflow-y: auto;
   gap: var(--space-3);
-  max-height: 340px;
+  max-height: 380px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: var(--space-3);
@@ -513,12 +548,10 @@
 }
 
 .overlay-variable-group h4 {
-  margin-bottom: 5px;
-  color: var(--text-faint);
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  margin-bottom: 7px;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .overlay-variables {
@@ -528,21 +561,58 @@
 }
 
 .overlay-variables button {
-  min-height: 26px;
-  padding: 0 8px;
-  font-size: 11.5px;
+  min-height: 28px;
+  padding: 0 9px;
+  font-size: 12.5px;
   font-weight: 500;
 }
 
 .overlay-variables button em {
-  max-width: 118px;
+  max-width: 128px;
   overflow: hidden;
   color: var(--accent);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 11.5px;
   font-style: normal;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Presets read as a row of chips: apply on click, × to delete a saved one. */
+.preset-bar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.preset-list {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.preset-saved {
+  display: inline-flex;
+  align-items: center;
+}
+
+.preset-saved > button:first-child {
+  border-right-width: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.preset-saved > button:last-child {
+  padding: 0 7px;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  color: var(--text-faint);
+}
+
+.preset-saved > button:last-child:hover:not(:disabled) {
+  color: var(--danger);
 }
 
 .entity-list {
@@ -570,18 +640,18 @@
 }
 
 .entity-row-head .grow {
-  font-size: 12.5px;
+  font-size: 13.5px;
   font-weight: 600;
 }
 
 .entity-preview {
   overflow: hidden;
   border-radius: var(--radius-sm);
-  padding: 4px 7px;
+  padding: 5px 8px;
   background: var(--surface-inset);
   color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

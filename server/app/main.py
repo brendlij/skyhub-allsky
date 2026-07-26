@@ -29,6 +29,7 @@ from app.repositories.node_device_settings_repository import NodeDeviceSettingsR
 from app.repositories.node_environment_repository import NodeEnvironmentRepository
 from app.repositories.node_heater_state_repository import NodeHeaterStateRepository
 from app.repositories.node_overlay_settings_repository import NodeOverlaySettingsRepository
+from app.repositories.overlay_preset_repository import OverlayPresetRepository, preset_to_dict
 from app.realtime.connection_manager import ConnectionManager
 from app.security import (
     API_KEY_HEADER,
@@ -37,6 +38,13 @@ from app.security import (
     log_startup_state,
     request_is_authorised,
     websocket_is_authorised,
+)
+from app.masks import (
+    apply_mask_to_file,
+    delete_mask,
+    mask_info,
+    mask_path,
+    save_mask,
 )
 from app.overlays import (
     overlay_presets,
@@ -645,6 +653,7 @@ async def delete_node(node_id: str, db: Session = Depends(get_db_session)):
     node_repo = NodeRepository(db)
     settings_deleted = settings_repo.delete(node_id)
     node_deleted = node_repo.delete(node_id)
+    delete_mask(node_id)
 
     if not node_deleted and not settings_deleted:
         raise HTTPException(status_code=404, detail="Node not found")
@@ -720,7 +729,7 @@ class OverlayEntity(BaseModel):
     x: float = 0
     y: float = 0
     anchor: str = "top-left"
-    font_size: int = 28
+    font_size: int = 96
     color: str = "#ffffff"
     background: str = "#000000"
     background_opacity: float = 0.35
@@ -730,6 +739,28 @@ class OverlayEntity(BaseModel):
 class NodeOverlaySettingsUpdate(BaseModel):
     enabled: bool | None = None
     entities: list[OverlayEntity] | None = None
+
+
+# A preset is a layout, not a live overlay: no entity ids, because they are minted
+# fresh every time the preset is applied to a node.
+class OverlayPresetEntity(BaseModel):
+    label: str | None = None
+    text: str | None = None
+    enabled: bool = True
+    x: float = 0
+    y: float = 0
+    anchor: str = "top-left"
+    font_size: int = 96
+    color: str = "#ffffff"
+    background: str = "#000000"
+    background_opacity: float = 0.35
+
+
+class OverlayPresetSave(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=300)
+    entities: list[OverlayPresetEntity] = Field(min_length=1)
+    overwrite: bool = False
 
 
 class NodeHeaterStateUpdate(BaseModel):
@@ -1309,10 +1340,73 @@ async def list_overlay_variables(
 
     return {
         "variables": variable_catalog(live_values),
-        "presets": overlay_presets(),
+        "presets": all_overlay_presets(db),
         "node_id": node_id,
         "has_live_values": has_capture,
     }
+
+
+def all_overlay_presets(db: Session) -> list[dict]:
+    """Built-in layouts first, then the user's saved ones."""
+    return overlay_presets() + [
+        preset_to_dict(preset) for preset in OverlayPresetRepository(db).list()
+    ]
+
+
+@app.get("/api/overlays/presets")
+async def list_overlay_presets(db: Session = Depends(get_db_session)):
+    return {"presets": all_overlay_presets(db)}
+
+
+@app.post("/api/overlays/presets", status_code=201)
+async def create_overlay_preset(
+    request: OverlayPresetSave,
+    db: Session = Depends(get_db_session),
+):
+    repo = OverlayPresetRepository(db)
+    name = request.name.strip()
+
+    if not name:
+        raise HTTPException(status_code=400, detail="A preset needs a name")
+
+    entities = [entity.model_dump() for entity in request.entities]
+    existing = repo.get_by_name(name)
+
+    # Saving over a name is how you update a preset, but only when the client
+    # said so - otherwise a repeated save would silently replace someone's layout.
+    if existing is not None:
+        if not request.overwrite:
+            raise HTTPException(
+                status_code=409,
+                detail=f'A preset named "{name}" already exists',
+            )
+
+        preset = repo.update(
+            existing,
+            {"description": request.description, "entities": entities},
+        )
+
+    else:
+        preset = repo.create(name, entities, request.description)
+
+    logger.info("overlay.preset_saved", preset_id=preset.id, name=preset.name)
+
+    return preset_to_dict(preset)
+
+
+@app.delete("/api/overlays/presets/{preset_id}", status_code=204)
+async def delete_overlay_preset(preset_id: str, db: Session = Depends(get_db_session)):
+    repo = OverlayPresetRepository(db)
+    preset = repo.get(preset_id)
+
+    if preset is None:
+        # Built-in presets live in code, so there is nothing to delete either way.
+        raise HTTPException(status_code=404, detail="Preset not found")
+
+    repo.delete(preset)
+    logger.info("overlay.preset_deleted", preset_id=preset_id)
+
+    return Response(status_code=204)
 
 
 @app.get("/api/nodes/{node_id}/overlays")
@@ -1362,6 +1456,56 @@ async def update_node_overlays(
     )
 
     return payload
+
+
+@app.get("/api/nodes/{node_id}/mask")
+async def get_node_mask(node_id: str):
+    return mask_info(node_id)
+
+
+@app.get("/api/nodes/{node_id}/mask/image", include_in_schema=False)
+async def get_node_mask_image(node_id: str):
+    path = mask_path(node_id)
+
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="No mask for this node")
+
+    return FileResponse(
+        path,
+        media_type="image/png",
+        # The filename never changes, so a cached copy would survive a re-upload.
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.post("/api/nodes/{node_id}/mask")
+async def upload_node_mask(node_id: str, file: UploadFile = File(...)):
+    data = await file.read()
+
+    try:
+        info = save_mask(node_id, data)
+
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+    logger.info("mask.uploaded", node_id=node_id, size_bytes=info.get("size_bytes"))
+
+    await connections.broadcast_dashboard({"type": "mask.updated", "node_id": node_id, "mask": info})
+
+    return info
+
+
+@app.delete("/api/nodes/{node_id}/mask")
+async def remove_node_mask(node_id: str):
+    if not delete_mask(node_id):
+        raise HTTPException(status_code=404, detail="No mask for this node")
+
+    logger.info("mask.deleted", node_id=node_id)
+
+    info = mask_info(node_id)
+    await connections.broadcast_dashboard({"type": "mask.updated", "node_id": node_id, "mask": info})
+
+    return info
 
 
 @app.get("/api/nodes/{node_id}/environment")
@@ -1858,6 +2002,15 @@ async def upload_capture(
     with output_path.open("wb") as output_file:
         shutil.copyfileobj(file.file, output_file)
 
+    # Before the original is filed away, so the mask covers the raw copy too. It
+    # is one extra encode, and only when the node actually has a mask.
+    try:
+        apply_mask_to_file(upload_node_id, output_path)
+
+    except OSError as error:
+        # A broken mask must not cost the frame that just came off the camera.
+        logger.warning("capture.mask_failed", node_id=node_id, error=str(error))
+
     shutil.copy2(output_path, original_path)
 
     overlay_settings = NodeOverlaySettingsRepository(db).get_or_create(upload_node_id)
@@ -2116,8 +2269,38 @@ async def dashboard_websocket(websocket: WebSocket):
         connections.disconnect_dashboard(websocket)
 
 
+def _frontend_dist_file(relative_path: str) -> Path | None:
+    """Resolve a request path to a file in the built frontend, or None.
+
+    Anything that resolves outside the dist directory is rejected, so a crafted
+    path cannot walk out of it.
+    """
+    if not relative_path or relative_path.endswith("/"):
+        return None
+
+    dist_dir = settings.frontend_dist_dir.resolve()
+
+    try:
+        candidate = (dist_dir / relative_path).resolve()
+
+    except (OSError, ValueError):
+        return None
+
+    if not candidate.is_relative_to(dist_dir) or not candidate.is_file():
+        return None
+
+    return candidate
+
+
 @app.get("/{frontend_path:path}", include_in_schema=False)
 async def frontend_route(frontend_path: str):
+    # Vite copies frontend/public/ to the dist root, so the logo, favicons and
+    # friends sit beside index.html rather than under the mounted /assets.
+    static_path = _frontend_dist_file(frontend_path)
+
+    if static_path is not None:
+        return FileResponse(static_path)
+
     first_segment = frontend_path.split("/", 1)[0]
 
     if first_segment not in {"monitor", "captures", "overlays", "settings", "nodes"}:

@@ -20,25 +20,27 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-sans);
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
 
+/* Three steps of hierarchy, no more: page, section, label. Weight does the work
+ * that borders used to. */
 h1,
 h2,
 h3,
 h4 {
-  font-weight: 650;
-  letter-spacing: -0.011em;
+  font-weight: 600;
+  letter-spacing: -0.015em;
   line-height: 1.25;
 }
 
-h1 { font-size: 22px; }
-h2 { font-size: 16px; }
-h3 { font-size: 13.5px; }
-h4 { font-size: 12px; }
+h1 { font-size: 26px; }
+h2 { font-size: 16.5px; }
+h3 { font-size: 14.5px; }
+h4 { font-size: 13.5px; }
 
 a {
   color: var(--accent);
@@ -141,6 +143,7 @@ video {
 
 .stack { display: grid; gap: var(--space-3); }
 .stack-lg { display: grid; gap: var(--space-5); }
+.block { display: flex; width: 100%; }
 .row { display: flex; align-items: center; gap: var(--space-2); }
 .row-between { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
 .wrap { flex-wrap: wrap; }

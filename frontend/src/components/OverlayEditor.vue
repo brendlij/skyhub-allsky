@@ -1,6 +1,10 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { confirmAction } from "../composables/useConfirm";
+import { useToasts } from "../composables/useToasts";
+import { requestJson } from "../api/skyhub";
+
+const { notify, notifyError } = useToasts();
 
 const props = defineProps({
   overlays: {
@@ -147,15 +151,107 @@ const filteredGroups = computed(() => {
 async function loadVariables() {
   try {
     const query = props.nodeId ? `?node_id=${encodeURIComponent(props.nodeId)}` : "";
-    const response = await fetch(`/api/overlays/variables${query}`);
-    if (!response.ok) return;
+    const data = await requestJson(`/api/overlays/variables${query}`);
 
-    const data = await response.json();
     variables.value = data.variables;
     presets.value = data.presets || [];
     hasLiveValues.value = Boolean(data.has_live_values);
   } catch {
     // Picker degrades to typing tokens by hand; rendering is unaffected.
+  }
+}
+
+async function loadPresets() {
+  try {
+    const data = await requestJson("/api/overlays/presets");
+    presets.value = data.presets || [];
+  } catch (error) {
+    notifyError(error);
+  }
+}
+
+const savedPresets = computed(() => presets.value.filter((preset) => !preset.builtin));
+const builtinPresets = computed(() => presets.value.filter((preset) => preset.builtin));
+
+const presetName = ref("");
+const savingPreset = ref(false);
+const presetNameInput = ref(null);
+
+async function openPresetForm() {
+  presetName.value = "";
+  savingPreset.value = true;
+  await nextTick();
+  presetNameInput.value?.focus();
+}
+
+async function savePreset() {
+  const name = presetName.value.trim();
+
+  if (!name || !props.overlays.entities.length) return;
+
+  const entities = props.overlays.entities.map(({ id, type, ...entity }) => entity);
+
+  try {
+    await requestJson("/api/overlays/presets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, entities, overwrite: false })
+    });
+
+  } catch (error) {
+    // 409 is the server saying the name is taken. Ask, then save over it.
+    if (!String(error.message).includes("already exists")) {
+      notifyError(error);
+      return;
+    }
+
+    const confirmed = await confirmAction({
+      title: `Replace "${name}"?`,
+      message: "A preset with that name already exists. Saving replaces its layout.",
+      confirmLabel: "Replace",
+      tone: "danger"
+    });
+
+    if (!confirmed) return;
+
+    try {
+      await requestJson("/api/overlays/presets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, entities, overwrite: true })
+      });
+
+    } catch (retryError) {
+      notifyError(retryError);
+      return;
+    }
+  }
+
+  savingPreset.value = false;
+  presetName.value = "";
+  notify(`Saved preset "${name}"`);
+  await loadPresets();
+}
+
+async function deletePreset(preset) {
+  const confirmed = await confirmAction({
+    title: `Delete "${preset.name}"?`,
+    message: "The preset is removed for every node. Overlays already applied are untouched.",
+    confirmLabel: "Delete",
+    tone: "danger"
+  });
+
+  if (!confirmed) return;
+
+  try {
+    await requestJson(`/api/overlays/presets/${encodeURIComponent(preset.id)}`, {
+      method: "DELETE"
+    });
+
+    await loadPresets();
+
+  } catch (error) {
+    notifyError(error);
   }
 }
 
@@ -675,18 +771,68 @@ watch(
         </div>
 
         <div class="panel-body">
-          <div class="row wrap">
-            <select
-              v-if="presets.length"
-              class="grow"
-              @change="applyPreset(presets[$event.target.selectedIndex - 1]); $event.target.selectedIndex = 0"
-            >
-              <option value="">Start from a preset…</option>
-              <option v-for="preset in presets" :key="preset.id" :title="preset.description">
+          <div class="preset-bar">
+            <div class="preset-list">
+              <button
+                v-for="preset in builtinPresets"
+                :key="preset.id"
+                type="button"
+                class="sm"
+                :title="preset.description"
+                @click="applyPreset(preset)"
+              >
                 {{ preset.name }}
-              </option>
-            </select>
-            <button type="button" class="primary" @click="addTextEntity">Add label</button>
+              </button>
+
+              <span v-for="preset in savedPresets" :key="preset.id" class="preset-saved">
+                <button
+                  type="button"
+                  class="sm"
+                  :title="preset.description || 'Saved preset'"
+                  @click="applyPreset(preset)"
+                >
+                  {{ preset.name }}
+                </button>
+                <button
+                  type="button"
+                  class="sm"
+                  :aria-label="`Delete preset ${preset.name}`"
+                  title="Delete preset"
+                  @click="deletePreset(preset)"
+                >
+                  ×
+                </button>
+              </span>
+            </div>
+
+            <div class="row wrap">
+              <button
+                type="button"
+                :disabled="!overlays.entities.length"
+                :title="overlays.entities.length ? 'Save this layout as a reusable preset' : 'Add a label first'"
+                @click="openPresetForm"
+              >
+                Save as preset
+              </button>
+              <button type="button" class="primary" @click="addTextEntity">Add label</button>
+            </div>
+          </div>
+
+          <div v-if="savingPreset" class="row wrap">
+            <input
+              ref="presetNameInput"
+              v-model="presetName"
+              class="grow"
+              maxlength="120"
+              placeholder="Preset name"
+              aria-label="Preset name"
+              @keydown.enter.prevent="savePreset"
+              @keydown.esc="savingPreset = false"
+            />
+            <button type="button" class="primary" :disabled="!presetName.trim()" @click="savePreset">
+              Save
+            </button>
+            <button type="button" class="ghost" @click="savingPreset = false">Cancel</button>
           </div>
 
           <p v-if="allWarnings.length" class="callout warning">

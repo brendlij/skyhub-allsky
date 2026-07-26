@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref, watch } from "vue";
 import ColourControls from "../components/ColourControls.vue";
+import MaskControls from "../components/MaskControls.vue";
 import EmptyState from "../components/ui/EmptyState.vue";
 import { formatBytes } from "../api/skyhub";
 import { useSkyHub } from "../composables/useSkyHub";
@@ -287,6 +288,8 @@ const STORAGE_KEYS = [
       </section>
 
       <div class="settings-grid">
+        <MaskControls />
+
         <section v-if="deviceSettings" class="panel">
           <div class="panel-header">
             <h2>
