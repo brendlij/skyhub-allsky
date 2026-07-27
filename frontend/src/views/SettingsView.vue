@@ -2,6 +2,7 @@
 import { computed, ref, watch } from "vue";
 import AccessControls from "../components/AccessControls.vue";
 import ColourControls from "../components/ColourControls.vue";
+import ProcessingControls from "../components/ProcessingControls.vue";
 import SecurityControls from "../components/SecurityControls.vue";
 import MaskControls from "../components/MaskControls.vue";
 import EmptyState from "../components/ui/EmptyState.vue";
@@ -473,6 +474,7 @@ const STORAGE_KEYS = [
          about whichever camera happens to be selected, and they have to stay
          reachable when there are no nodes at all. -->
     <div class="settings-grid">
+      <ProcessingControls />
       <SecurityControls />
       <AccessControls />
     </div>

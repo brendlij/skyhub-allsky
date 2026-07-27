@@ -4,6 +4,7 @@ import CaptureExplorerView from "./views/CaptureExplorerView.vue";
 import SettingsView from "./views/SettingsView.vue";
 import NodesView from "./views/NodesView.vue";
 import OverlaysView from "./views/OverlaysView.vue";
+import ProductsView from "./views/ProductsView.vue";
 import LoginView from "./views/LoginView.vue";
 import { authState, refreshAuthState } from "./api/auth";
 
@@ -14,6 +15,7 @@ export const router = createRouter({
     { path: "/login", component: LoginView, meta: { public: true } },
     { path: "/monitor", component: MonitorView },
     { path: "/captures", component: CaptureExplorerView },
+    { path: "/products", component: ProductsView },
     { path: "/overlays", component: OverlaysView },
     { path: "/settings", component: SettingsView },
     { path: "/nodes", component: NodesView }

@@ -600,9 +600,32 @@ function handleDashboardEvent(event) {
     return;
   }
 
+  if (
+    event.type === "processing.products"
+    || event.type === "processing.session"
+    || event.type === "processing.progress"
+  ) {
+    // Fanned out rather than handled here: the products view owns that state, and
+    // this composable should not grow a dependency on a screen most sessions
+    // never open.
+    for (const listener of processingListeners) listener(event);
+
+    return;
+  }
+
   if (event.type === "node.updated" || event.type === "node.deleted") {
     loadNodes().catch(() => {});
   }
+}
+
+/* Subscription for the processing views. A Set so a component that mounts twice
+ * during a hot reload does not end up handling every event twice. */
+const processingListeners = new Set();
+
+export function onProcessingEvent(listener) {
+  processingListeners.add(listener);
+
+  return () => processingListeners.delete(listener);
 }
 
 function connectDashboardSocket() {

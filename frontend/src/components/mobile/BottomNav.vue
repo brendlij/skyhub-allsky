@@ -10,6 +10,7 @@ const { nodes } = useSkyHub();
 const links = [
   { to: "/monitor", label: "Monitor", icon: "◉" },
   { to: "/captures", label: "Captures", icon: "▦" },
+  { to: "/products", label: "Products", icon: "✦" },
   { to: "/overlays", label: "Overlays", icon: "◫" },
   { to: "/settings", label: "Settings", icon: "⚙" },
   { to: "/nodes", label: "Nodes", icon: "⬡" }
