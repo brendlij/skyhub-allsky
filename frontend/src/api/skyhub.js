@@ -1,35 +1,29 @@
-import { ref } from "vue";
+import { markSignedOut, readCsrfToken } from "./auth";
 
-// The server only demands this when SKYHUB_SERVER_API_KEY is set; an install
-// without one never sees a prompt. Kept in localStorage because there is no
-// login: the key is the whole credential, and it is a LAN tool.
-const API_KEY_STORAGE = "skyhub.api_key";
-
-export const apiKey = ref(localStorage.getItem(API_KEY_STORAGE) || "");
-export const apiKeyRequired = ref(false);
-
-export function setApiKey(value) {
-  const key = String(value || "").trim();
-
-  apiKey.value = key;
-
-  if (key) {
-    localStorage.setItem(API_KEY_STORAGE, key);
-  } else {
-    localStorage.removeItem(API_KEY_STORAGE);
-  }
-}
+/* The browser carries no API key any more.
+ *
+ * Humans authenticate with a session cookie the server sets on login: HttpOnly,
+ * SameSite=Strict, and revocable. The cookie is attached by the browser to every
+ * request on this origin - including <img> loads and the WebSocket handshake -
+ * which is why nothing here has to sign a URL. The shared API key still exists,
+ * but it belongs to camera nodes and scripts, and is never handed to a browser.
+ *
+ * See api/auth.js for the session itself.
+ */
 
 function authHeaders() {
-  return apiKey.value ? { "X-API-Key": apiKey.value } : {};
+  const csrf = readCsrfToken();
+
+  return csrf ? { "X-CSRF-Token": csrf } : {};
 }
 
-/** Append the key to a URL the browser fetches without us: <img>, WebSocket. */
+/** Kept for call sites that build a URL the browser fetches on its own.
+ *
+ * Now a no-op: the session cookie travels with same-origin requests by itself,
+ * so an image or socket URL needs nothing appended. Left in place so those call
+ * sites keep documenting *why* they were special. */
 export function withApiKey(url) {
-  if (!apiKey.value) return url;
-
-  const separator = url.includes("?") ? "&" : "?";
-  return `${url}${separator}api_key=${encodeURIComponent(apiKey.value)}`;
+  return url;
 }
 
 /* FastAPI reports failures as {"detail": "…"}. Showing the raw JSON in a toast
@@ -55,21 +49,22 @@ function errorMessage(text) {
 export async function requestJson(url, options = {}) {
   const response = await fetch(url, {
     ...options,
+    credentials: "same-origin",
     headers: { ...authHeaders(), ...(options.headers || {}) }
   });
 
   if (response.status === 401) {
-    // Surfaces the key prompt rather than a wall of failed-request toasts.
-    apiKeyRequired.value = true;
-    throw new Error("This server needs an API key");
+    /* The session expired, was revoked from another browser, or never existed.
+     * Flip the shared state and let the router guard move to the login page -
+     * far better than a wall of failed-request toasts. */
+    markSignedOut();
+    throw new Error("Your session has ended. Sign in again.");
   }
 
   if (!response.ok) {
     const text = await response.text();
     throw new Error(errorMessage(text) || response.statusText);
   }
-
-  apiKeyRequired.value = false;
 
   // A 204 (delete) has no body, and response.json() would throw on it.
   if (response.status === 204) return null;
@@ -83,9 +78,9 @@ export function captureUrl(capture, options = {}) {
 
   if (options.raw) params.set("raw", "true");
   if (options.thumb) params.set("thumb", "true");
-  // An <img> cannot carry a header, so the key has to ride in the query string.
-  if (apiKey.value) params.set("api_key", apiKey.value);
 
+  // No credential in the query string: the <img> that loads this carries the
+  // session cookie on its own, so the URL is safe to log, cache and share.
   const query = params.toString();
   return query ? `${url}?${query}` : url;
 }

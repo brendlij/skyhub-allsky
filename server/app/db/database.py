@@ -33,6 +33,9 @@ def create_db_tables():
 def ensure_lightweight_migrations():
     inspector = inspect(engine)
 
+    migrate_derived_products(inspector)
+    migrate_processing_sessions(inspector)
+
     if not inspector.has_table("node_camera_settings"):
         return
 
@@ -99,6 +102,59 @@ def ensure_lightweight_migrations():
             connection.execute(text(migration))
 
 
+def add_missing_columns(table: str, inspector, wanted: dict[str, str]) -> None:
+    """Add columns a newer model expects to a table that predates them.
+
+    SQLite can add a column but not change or drop one, which is exactly the
+    subset this project needs: every schema change so far has been additive, and
+    keeping it that way is what lets an install upgrade without a migration tool.
+    """
+    if not inspector.has_table(table):
+        return
+
+    existing = {column["name"] for column in inspector.get_columns(table)}
+    statements = [
+        f"ALTER TABLE {table} ADD COLUMN {name} {definition}"
+        for name, definition in wanted.items()
+        if name not in existing
+    ]
+
+    if not statements:
+        return
+
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
+def migrate_derived_products(inspector) -> None:
+    """Products gained a session link, a category, variants and a version."""
+    add_missing_columns(
+        "derived_products",
+        inspector,
+        {
+            "session_key": "VARCHAR(200)",
+            "category": "VARCHAR(50) NOT NULL DEFAULT 'analysis'",
+            "preview_path": "VARCHAR(500)",
+            "web_path": "VARCHAR(500)",
+            "version": "INTEGER NOT NULL DEFAULT 1",
+        },
+    )
+
+
+def migrate_processing_sessions(inspector) -> None:
+    """Sessions gained a kind, a label and per-processor progress."""
+    add_missing_columns(
+        "processing_sessions",
+        inspector,
+        {
+            "session_kind": "VARCHAR(30) NOT NULL DEFAULT 'solar'",
+            "label": "VARCHAR(120)",
+            "progress": "JSON",
+        },
+    )
+
+
 def get_db_session():
     db = SessionLocal()
     try:
@@ -106,4 +162,4 @@ def get_db_session():
     finally:
         db.close()
 
-from app.models import capture_storage_settings, node, node_camera_settings, node_capture_state, node_device_settings, node_environment, node_heater_state, node_overlay_settings, overlay_preset  # noqa: F401
+from app.models import admin_account, admin_session, capture_storage_settings, derived_product, node, node_camera_settings, node_capture_state, node_device_settings, node_environment, node_heater_state, node_overlay_settings, overlay_preset, processing_session, processing_settings, retention_policy, trusted_device  # noqa: F401

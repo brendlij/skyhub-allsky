@@ -31,13 +31,22 @@ from app.repositories.node_heater_state_repository import NodeHeaterStateReposit
 from app.repositories.node_overlay_settings_repository import NodeOverlaySettingsRepository
 from app.repositories.overlay_preset_repository import OverlayPresetRepository, preset_to_dict
 from app.realtime.connection_manager import ConnectionManager
+from app.auth import sessions as auth_sessions, setup as auth_setup
+from app.auth.routes import router as auth_router
+from app.processing import FrameEvent, pipeline
+from app.processing.retention import apply_retention
+from app.processing.routes import router as processing_router
+from app.repositories.admin_account_repository import AdminAccountRepository
+from app.repositories.processing_repository import ProcessingSessionRepository
 from app.security import (
     API_KEY_HEADER,
     API_KEY_QUERY,
     api_key_required,
     log_startup_state,
-    request_is_authorised,
-    websocket_is_authorised,
+    path_is_node_route,
+    request_has_valid_key,
+    request_is_public,
+    websocket_key_is_valid,
 )
 from app.masks import (
     apply_mask_to_file,
@@ -81,7 +90,7 @@ async def period_watch_loop():
             if latest_period == period:
                 continue
 
-            period = latest_period
+            previous_period, period = period, latest_period
             db = SessionLocal()
 
             try:
@@ -94,10 +103,85 @@ async def period_watch_loop():
                 db.close()
 
             logger.info("period.changed", period=period)
+
+            # Sunrise and sunset are exactly the session boundaries: the period
+            # that just ended has no more frames coming, so this is the moment its
+            # startrail, keogram and timelapse are finalised.
+            await close_finished_sessions(previous_period)
         except Exception as error:
             # A failure here must not kill the watcher, or the next switchover is
             # missed as well.
             logger.warning("period.watch.failed", error=str(error))
+
+
+async def close_finished_sessions(ended_period: str) -> None:
+    """Finalise every open processing session for the period that just ended.
+
+    Driven off the period watcher rather than a clock: the watcher already knows
+    when the sun crossed, and using the same signal means the session boundary and
+    the node's exposure profile change together, so no frame is ever attributed to
+    a session that has already been encoded.
+
+    Sessions are closed one at a time. Each one may spend minutes in ffmpeg, and
+    running several at once on a Pi would leave none of them finishing.
+    """
+    db = SessionLocal()
+
+    try:
+        open_sessions = ProcessingSessionRepository(db).list_open()
+    finally:
+        db.close()
+
+    for record in open_sessions:
+        if record.period != ended_period:
+            continue
+
+        # A session someone opened by hand is theirs to close. The sun crossing
+        # says nothing about a focus test or a meteor-shower run.
+        if record.session_kind != "solar":
+            continue
+
+        try:
+            await pipeline.close_session(record.node_id, record.archive_date, record.period)
+
+        except Exception as error:
+            # One session's encode failing must not strand the others still open.
+            logger.warning(
+                "processing.close_failed", session=record.session_key, error=str(error)
+            )
+
+
+SESSION_HOUSEKEEPING_INTERVAL_SECONDS = 3600
+
+
+async def session_housekeeping_loop():
+    """Clear sessions and trusted devices whose deadlines have passed.
+
+    Expiry is enforced on every read regardless, so this is hygiene rather than a
+    control - it keeps a long-lived install from accumulating dead rows.
+    """
+    while True:
+        await asyncio.sleep(SESSION_HOUSEKEEPING_INTERVAL_SECONDS)
+
+        db = SessionLocal()
+
+        try:
+            removed = auth_sessions.purge_expired(db)
+
+            if removed:
+                logger.info("auth.sessions.purged", count=removed)
+        except Exception as error:
+            logger.warning("auth.sessions.purge_failed", error=str(error))
+        finally:
+            db.close()
+
+        # Derived products expire on their own rules, per category and per node.
+        # Nothing is configured by default, so this is a no-op until an operator
+        # sets a policy.
+        try:
+            await asyncio.to_thread(apply_retention)
+        except Exception as error:
+            logger.warning("processing.retention_failed", error=str(error))
 
 
 @asynccontextmanager
@@ -107,17 +191,34 @@ async def lifespan(app: FastAPI):
     try:
         offline_count = NodeRepository(db).mark_all_offline()
         logger.info("nodes.marked_offline", count=offline_count)
+
+        # No operator yet: open the first-run wizard and print the token that
+        # gates it, so only someone who can read the server's log or filesystem
+        # can claim the account.
+        if not AdminAccountRepository(db).exists():
+            auth_setup.begin()
     finally:
         db.close()
 
     logger.info("database.ready")
     log_startup_state()
+
+    # Started before the watchers: a frame arriving in the first second should be
+    # processed, not dropped because the queue does not exist yet.
+    await pipeline.start(broadcast=connections.broadcast_dashboard)
+
     watcher = asyncio.create_task(period_watch_loop())
+    housekeeper = asyncio.create_task(session_housekeeping_loop())
 
     try:
         yield
     finally:
         watcher.cancel()
+        housekeeper.cancel()
+        # Drains what is queued and lets each processor flush its state, but
+        # deliberately leaves sessions open: a restart resumes the night from
+        # disk rather than encoding half of it.
+        await pipeline.stop()
 
 
 app = FastAPI(
@@ -127,22 +228,89 @@ app = FastAPI(
 )
 
 
+def origin_is_same_site(request: Request) -> bool:
+    """Reject a state-changing request that announces a foreign origin.
+
+    Belt to SameSite=Strict's braces, and cheap. Only applied when the browser
+    actually sent an Origin - curl, camera nodes and Home Assistant send none,
+    and demanding one would break every non-browser client for no gain.
+    """
+    origin = request.headers.get("Origin")
+
+    if not origin:
+        return True
+
+    host = request.headers.get("Host", "")
+
+    if not host:
+        return False
+
+    return origin.split("://")[-1].casefold() == host.casefold()
+
+
 @app.middleware("http")
-async def api_key_middleware(request: Request, call_next):
+async def authorisation_middleware(request: Request, call_next):
     """Guard every /api route in one place.
 
     A middleware rather than a per-route dependency so a route added later cannot
     forget it. The frontend, the docs and the static assets stay open - they are
     just a shell, and every call they make comes back through here anyway.
-    """
-    if request.url.path.startswith("/api") and not request_is_authorised(request):
-        return JSONResponse(
-            status_code=401,
-            content={"detail": "Invalid or missing API key"},
-            headers={"WWW-Authenticate": API_KEY_HEADER},
-        )
 
-    return await call_next(request)
+    Order matters. Public paths first, then the machine credential, then the human
+    one, because only the last of those costs a database round trip.
+    """
+    path = request.url.path
+
+    if not path.startswith("/api"):
+        return await call_next(request)
+
+    # /health, the login routes, and the read-only public capture paths.
+    if request_is_public(request):
+        return await call_next(request)
+
+    # Machines: camera nodes and automation, holding the shared key.
+    if request_has_valid_key(request):
+        return await call_next(request)
+
+    # Humans: a session cookie that has cleared both password and TOTP.
+    db = SessionLocal()
+
+    try:
+        record = auth_sessions.load_session(db, request.cookies.get(auth_sessions.SESSION_COOKIE))
+
+        if record is not None and record.stage == auth_sessions.STAGE_ACTIVE:
+            if request.method in auth_sessions.UNSAFE_METHODS:
+                if not origin_is_same_site(request):
+                    return JSONResponse(
+                        status_code=403,
+                        content={"detail": "Cross-origin request refused."},
+                    )
+
+                if not auth_sessions.csrf_is_valid(request, record):
+                    return JSONResponse(
+                        status_code=403,
+                        content={"detail": "Missing or invalid CSRF token."},
+                    )
+
+            # Sliding idle window. Written before the route runs so a long upload
+            # cannot have its own session expire underneath it.
+            auth_sessions.touch_session(db, record)
+
+            return await call_next(request)
+    finally:
+        db.close()
+
+    # An install with no API key configured has always let nodes upload freely.
+    # Locking that down here would take every existing camera offline on upgrade;
+    # the startup log warns about it instead.
+    if not api_key_required() and path_is_node_route(path):
+        return await call_next(request)
+
+    return JSONResponse(
+        status_code=401,
+        content={"detail": "Sign in, or present a valid API key."},
+        headers={"WWW-Authenticate": API_KEY_HEADER},
+    )
 
 
 def openapi_with_security():
@@ -172,6 +340,8 @@ def openapi_with_security():
 
 
 app.openapi = openapi_with_security
+app.include_router(auth_router)
+app.include_router(processing_router)
 
 if (settings.frontend_dist_dir / "assets").exists():
     app.mount(
@@ -183,6 +353,13 @@ if (settings.frontend_dist_dir / "assets").exists():
 
 @app.get("/health")
 async def health():
+    """Liveness, and nothing else.
+
+    Public, so it must stay free of anything that helps someone decide whether
+    this server is worth attacking: no account state, no setup state, no hint
+    about which credentials are configured. The web UI asks /api/auth/status for
+    what it needs, and camera nodes learn about the API key by being rejected.
+    """
     return {"status": "ok"}
 
 
@@ -2053,6 +2230,25 @@ async def upload_capture(
     )
     cleanup_result = enforce_capture_retention(storage_settings, protected_paths={output_path})
 
+    # Hand the frame to the processors and move on. publish() is non-blocking and
+    # swallows its own failures, so nothing downstream of here can delay the
+    # response to the camera node or fail an upload that already succeeded.
+    pipeline.publish(
+        FrameEvent(
+            node_id=upload_node_id,
+            archive_date=archive_date,
+            period=period,
+            captured_at=captured_at,
+            rendered_path=output_path,
+            original_path=original_path,
+            thumbnail_path=thumbnail_path,
+            sequence_id=sequence_id,
+            width=capture_record["width"],
+            height=capture_record["height"],
+            metadata=parsed_metadata,
+        )
+    )
+
     logger.info(
         "capture.uploaded",
         node_id=node_id,
@@ -2095,9 +2291,57 @@ async def upload_capture(
     }
 
 
+async def node_socket_is_authorised(websocket: WebSocket) -> bool:
+    """A camera node's handshake. API key only - a node has no cookie jar.
+
+    Unauthenticated when no key is configured, which is the behaviour every
+    existing install already runs with; the startup log warns about it.
+    """
+    if not api_key_required():
+        return True
+
+    if await websocket_key_is_valid(websocket):
+        return True
+
+    logger.warning("websocket.unauthorised", path=websocket.url.path)
+    # Closing before accept() matters: accept-then-close looks to the client like
+    # a working connection that mysteriously went quiet.
+    await websocket.close(code=1008, reason="Invalid or missing API key")
+
+    return False
+
+
+async def dashboard_socket_is_authorised(websocket: WebSocket) -> bool:
+    """The browser's live feed. A session cookie, or a key for a headless client.
+
+    The cookie rides along on the handshake by itself, so a logged-in UI needs no
+    key in the query string - which is how the token used to end up in server
+    logs and browser history.
+    """
+    db = SessionLocal()
+
+    try:
+        record = auth_sessions.load_session(
+            db, websocket.cookies.get(auth_sessions.SESSION_COOKIE)
+        )
+
+        if record is not None and record.stage == auth_sessions.STAGE_ACTIVE:
+            return True
+    finally:
+        db.close()
+
+    if await websocket_key_is_valid(websocket):
+        return True
+
+    logger.warning("websocket.unauthorised", path=websocket.url.path)
+    await websocket.close(code=1008, reason="Sign in, or present a valid API key")
+
+    return False
+
+
 @app.websocket("/ws/nodes/{node_id}")
 async def node_websocket(websocket: WebSocket, node_id: str):
-    if not await websocket_is_authorised(websocket):
+    if not await node_socket_is_authorised(websocket):
         return
 
     await connections.connect(node_id, websocket)
@@ -2256,7 +2500,7 @@ async def node_websocket(websocket: WebSocket, node_id: str):
 
 @app.websocket("/ws/dashboard")
 async def dashboard_websocket(websocket: WebSocket):
-    if not await websocket_is_authorised(websocket):
+    if not await dashboard_socket_is_authorised(websocket):
         return
 
     await connections.connect_dashboard(websocket)
@@ -2303,7 +2547,13 @@ async def frontend_route(frontend_path: str):
 
     first_segment = frontend_path.split("/", 1)[0]
 
-    if first_segment not in {"monitor", "captures", "overlays", "settings", "nodes"}:
+    # Mirrors the client router. An allowlist rather than a catch-all so a typo'd
+    # URL is still a 404 instead of a page that renders and then fails.
+    # Mirrors the client router. An allowlist rather than a catch-all so a typo'd
+    # URL is still a 404 instead of a page that renders and then fails.
+    if first_segment not in {
+        "login", "monitor", "captures", "products", "overlays", "settings", "nodes"
+    }:
         raise HTTPException(status_code=404, detail="Not found")
 
     index_path = settings.frontend_dist_dir / "index.html"

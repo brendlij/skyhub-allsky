@@ -37,8 +37,18 @@ const ICONS = { success: "✓", error: "!", warning: "!", info: "i" };
   bottom: var(--space-4);
   display: grid;
   gap: var(--space-2);
-  width: min(380px, calc(100vw - var(--space-5)));
+  width: min(380px, calc(100vw - var(--space-6)));
   pointer-events: none;
+}
+
+/* Clear of the bottom navigation, and full width, where the screen is a phone. */
+@media (max-width: 1023.98px) {
+  .toast-stack {
+    right: var(--space-3);
+    bottom: calc(var(--bottom-nav-total) + var(--space-3));
+    left: var(--space-3);
+    width: auto;
+  }
 }
 
 .toast {
