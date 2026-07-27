@@ -51,6 +51,14 @@ class ServerSettings(BaseSettings):
     # dodge per-IP throttling by inventing a new address per request.
     trust_proxy_headers: bool = False
 
+    # Post-processing. The queue is bounded because a processor that falls behind
+    # must cost frames, not memory - on a Pi, an unbounded backlog of decoded
+    # images is an out-of-memory kill that takes the capture down with it.
+    processing_enabled: bool = True
+    processing_queue_size: int = 64
+    # Where ffmpeg lives, when it is not on PATH. Empty means "look it up".
+    ffmpeg_path: str = ""
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_prefix="SKYHUB_SERVER_",
@@ -75,6 +83,20 @@ class ServerSettings(BaseSettings):
     @property
     def masks_dir(self) -> Path:
         return self.data_dir / "masks"
+
+    @property
+    def derived_dir(self) -> Path:
+        """Finished products: startrails, keograms, timelapses, archives."""
+        return self.data_dir / "derived"
+
+    @property
+    def processing_state_dir(self) -> Path:
+        """Working state a session rebuilds from - stacks, strips, frame lists.
+
+        Separate from derived/ so it can be wiped without losing a night's output,
+        and so retention never has to tell the two apart.
+        """
+        return self.data_dir / "processing"
 
     @property
     def frontend_dist_dir(self) -> Path:
