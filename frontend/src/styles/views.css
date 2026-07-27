@@ -359,6 +359,67 @@
   line-height: 1.45;
 }
 
+/* Day and night are two whole profiles, not a minor filter, and editing the
+ * wrong one is silent until the sun moves - so the picker is a pair of full
+ * cards rather than a small segmented control. */
+.period-switch {
+  display: grid;
+  gap: var(--space-2);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: var(--space-2);
+}
+
+.period-tab {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 52px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 0 var(--space-3);
+  background: var(--surface-inset);
+  color: var(--text-muted);
+  font-size: 15px;
+  font-weight: 600;
+  transition: border-color var(--transition), background var(--transition), color var(--transition);
+}
+
+.period-tab:hover:not(.active) {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* Selection has to read at a glance: accent border, filled ground and a solid
+ * edge bar, not a slightly lighter grey. */
+.period-tab.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.period-tab-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.period-tab-label {
+  letter-spacing: 0.01em;
+}
+
+.period-tab-now {
+  margin-left: auto;
+  border-radius: var(--radius-full);
+  padding: 2px 8px;
+  background: var(--success-soft);
+  color: var(--success);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .period-card {
   display: grid;
   gap: var(--space-3);

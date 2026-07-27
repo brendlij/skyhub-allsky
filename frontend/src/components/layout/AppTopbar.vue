@@ -1,7 +1,8 @@
 <script setup>
 import { computed } from "vue";
-import { useRoute } from "vue-router";
-import { useSkyHub } from "../../composables/useSkyHub";
+import { useRoute, useRouter } from "vue-router";
+import { authState, logout, markSignedOut } from "../../api/auth";
+import { stopRealtime, useSkyHub } from "../../composables/useSkyHub";
 
 const {
   connectionState,
@@ -15,6 +16,21 @@ const {
 } = useSkyHub();
 
 const route = useRoute();
+const router = useRouter();
+
+/* Signing out has to be reachable without hunting through Settings - it is the
+ * one control someone reaches for in a hurry. It tolerates failure: if the call
+ * does not land, the local state is cleared anyway, so the browser is never left
+ * sitting in a UI it believes it is still signed in to. */
+async function signOut() {
+  try {
+    await logout();
+  } finally {
+    markSignedOut();
+    stopRealtime();
+    router.replace("/login");
+  }
+}
 
 const TITLES = {
   "/monitor": "Monitor",
@@ -92,6 +108,16 @@ const currentNode = computed({
         @click="refreshDashboard"
       >
         <span :class="{ spin: loading }" aria-hidden="true">↻</span>
+      </button>
+
+      <button
+        type="button"
+        class="icon ghost"
+        :title="`Sign out ${authState.username || ''}`.trim()"
+        aria-label="Sign out"
+        @click="signOut"
+      >
+        <span aria-hidden="true">⏻</span>
       </button>
     </div>
   </header>

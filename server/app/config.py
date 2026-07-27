@@ -26,6 +26,31 @@ class ServerSettings(BaseSettings):
     public_captures: bool = False
     public_capture_token: str = ""
 
+    # The API key is a machine credential: nodes and scripts cannot hold a session
+    # or answer a TOTP prompt. Left at False it also opens the rest of the API, so
+    # existing automation keeps working after the upgrade. Set it to True and the
+    # key unlocks only the node routes, making human and machine access fully
+    # disjoint - the stricter posture, at the cost of any script using /api/nodes.
+    api_key_nodes_only: bool = False
+
+    # Sessions. Idle expiry catches an abandoned browser; the absolute cap bounds
+    # how long a single stolen cookie stays useful no matter how active it is.
+    session_idle_minutes: int = 30
+    session_absolute_hours: int = 24
+    trusted_device_days: int = 30
+
+    # Login backoff. Delay doubles per consecutive failure from the base, capped -
+    # slow enough to make guessing hopeless, short enough that a fat-fingered
+    # password does not lock the operator out of their own camera for an hour.
+    login_backoff_base_seconds: int = 2
+    login_backoff_max_seconds: int = 300
+    login_attempt_window_minutes: int = 15
+
+    # Sent by a proxy in front of SkyHub. Only consulted when set, because an
+    # unvalidated X-Forwarded-For is trivially spoofed and would let an attacker
+    # dodge per-IP throttling by inventing a new address per request.
+    trust_proxy_headers: bool = False
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_prefix="SKYHUB_SERVER_",

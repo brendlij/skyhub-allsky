@@ -54,23 +54,44 @@ SKYHUB_NODE_CAMERA_DRIVER=picamera2 \
 bash scripts/install-node.sh
 ```
 
+## Signing in
+
+The web UI has one admin account, protected by a password and a TOTP code from an
+authenticator app. On first start the server prints a one-time setup token:
+
+```
+auth.setup.required  setup_token=WA-_fwzE3KPaCbFXc1xcgxc417yMHNbw
+```
+
+Open the UI, enter that token, pick a username and password, scan the QR code with
+Google Authenticator, Aegis, 1Password, Bitwarden or anything else that does TOTP,
+and confirm with a six-digit code. The token is also written to
+`data/setup-token.txt`, and both copies are destroyed once setup finishes.
+
+Passwords are stored as Argon2id hashes, sessions live on the server behind an
+HttpOnly cookie, and Settings → Security is where you change the password, replace
+the authenticator, review active sessions and sign out. Full details, including how
+to recover a lost authenticator, are in [docs/AUTH.md](docs/AUTH.md).
+
 ## API
 
 Everything the web UI does is available over HTTP, so the server can drive Home
 Assistant, Node-RED or your own scripts. See [docs/API.md](docs/API.md) for the
 full reference, or browse the live schema at `http://<server>:8000/docs`.
 
-Authentication is off by default. To require an API key on every `/api` route and
-both WebSockets, set one on the server and give the same value to each node:
+Camera nodes and scripts do not log in - they cannot answer a TOTP prompt - so they
+keep using the shared API key. Set one on the server and give the same value to each
+node:
 
 ```bash
 SKYHUB_SERVER_API_KEY=pick-something-long-and-random python skyhub.py server
 SKYHUB_NODE_API_KEY=pick-something-long-and-random python skyhub.py node
 ```
 
-The web UI asks for the key the first time it gets a 401 and remembers it in that
-browser. Without a key set, the server stays open to anyone who can reach the
-port - fine on a trusted LAN, not for anything reachable from the internet.
+Without a key set, your own login still works, but any machine that can reach the
+port can connect as a node and upload captures - fine on a trusted LAN, not for
+anything reachable from the internet. The key never opens the account itself: it
+cannot change your password, replace your authenticator or read your sessions.
 
 To publish the latest image somewhere without handing out that key - which can also
 change settings and stop capture - open up the current image on its own:

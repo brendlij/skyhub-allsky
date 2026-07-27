@@ -1,4 +1,5 @@
 import { computed, ref } from "vue";
+import { authState } from "../api/auth";
 import { captureUrl, preloadImage, requestJson, withApiKey } from "../api/skyhub";
 import { confirmAction } from "./useConfirm";
 import { useToasts } from "./useToasts";
@@ -512,7 +513,10 @@ function setHeaterEnabled(enabled) {
 
 function dashboardWebSocketUrl() {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  // A browser WebSocket cannot send headers, so the key goes in the query.
+
+  // A browser WebSocket cannot send headers, which used to mean the credential
+  // rode in the query string. The session cookie is attached to the handshake
+  // by the browser itself, so the URL now carries nothing secret.
   return withApiKey(`${protocol}//${window.location.host}/ws/dashboard`);
 }
 
@@ -650,10 +654,35 @@ function connectDashboardSocket() {
 function ensureRealtimeRefresh() {
   if (initialized) return;
 
+  /* Nothing starts before there is a session. The login page mounts the same
+   * shell as everything else, and without this it would open a WebSocket the
+   * server closes and a round of requests the server 401s - a reconnect loop
+   * behind a login form. `initialized` stays false, so the first view to render
+   * after a successful login starts it all properly. */
+  if (!authState.value.authenticated) return;
+
   initialized = true;
 
   refreshDashboard().catch((error) => notifyError(error));
   connectDashboardSocket();
+}
+
+/** Tear the live connection down on sign-out, so it cannot reconnect as nobody. */
+export function stopRealtime() {
+  initialized = false;
+  connectionState.value = "offline";
+
+  if (reconnectTimer !== null) {
+    window.clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+
+  if (dashboardSocket) {
+    // Drop the handler first: onclose would otherwise schedule a reconnect.
+    dashboardSocket.onclose = null;
+    dashboardSocket.close();
+    dashboardSocket = null;
+  }
 }
 
 export function useSkyHub() {

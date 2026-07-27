@@ -1,6 +1,8 @@
 <script setup>
 import { computed, ref, watch } from "vue";
+import AccessControls from "../components/AccessControls.vue";
 import ColourControls from "../components/ColourControls.vue";
+import SecurityControls from "../components/SecurityControls.vue";
 import MaskControls from "../components/MaskControls.vue";
 import EmptyState from "../components/ui/EmptyState.vue";
 import { formatBytes } from "../api/skyhub";
@@ -9,6 +11,7 @@ import { useSkyHub } from "../composables/useSkyHub";
 const {
   busy,
   deviceSettings,
+  latest,
   saveDeviceSettings,
   saveSettings,
   saveStorageSettings,
@@ -17,7 +20,26 @@ const {
   storageStats
 } = useSkyHub();
 
-const activePeriod = ref("night");
+const PERIODS = [
+  { id: "night", label: "Night", icon: "🌙" },
+  { id: "day", label: "Day", icon: "☀️" }
+];
+
+/* The node reports the period of its last frame, which is the profile actually
+ * in use - so the tab opens on the settings that are live rather than always on
+ * night. */
+const livePeriod = computed(() => {
+  const period = latest.value?.period;
+  return period === "day" || period === "night" ? period : null;
+});
+
+const activePeriod = ref(livePeriod.value || "night");
+const periodPinned = ref(false);
+
+function selectPeriod(period) {
+  periodPinned.value = true;
+  activePeriod.value = period;
+}
 
 /* Dirty tracking: the old form had a Save button with no indication of unsaved
  * work, so navigating away silently discarded edits. */
@@ -34,6 +56,12 @@ watch(deviceSettings, (value) => { deviceBaseline.value = snapshot(value); }, { 
 const cameraDirty = computed(() => Boolean(settings.value) && snapshot(settings.value) !== baseline.value);
 const storageDirty = computed(() => Boolean(storageSettings.value) && snapshot(storageSettings.value) !== storageBaseline.value);
 const deviceDirty = computed(() => Boolean(deviceSettings.value) && snapshot(deviceSettings.value) !== deviceBaseline.value);
+
+/* Follow the node until the tab is picked by hand. Unsaved work pins it too, so
+ * a sunset can never move the form out from under an edit in flight. */
+watch(livePeriod, (period) => {
+  if (period && !periodPinned.value && !cameraDirty.value) activePeriod.value = period;
+});
 
 // Every frame off the sensor costs a full exposure. A fixed exposure needs only
 // the frame it keeps, but auto re-tunes constantly and pays for settle frames on
@@ -133,7 +161,7 @@ const STORAGE_KEYS = [
     <div class="page-head">
       <div class="page-head-text">
         <h1>Settings</h1>
-        <p>Camera, colour, hardware and storage for the selected node</p>
+        <p>Camera, colour, hardware and storage for the selected node — plus your account and this server's access</p>
       </div>
     </div>
 
@@ -197,14 +225,35 @@ const STORAGE_KEYS = [
 
           <div class="section">
             <div class="section-title">Exposure &amp; colour</div>
-            <div class="segmented">
-              <button type="button" :class="{ active: activePeriod === 'night' }" @click="activePeriod = 'night'">
-                Night
-              </button>
-              <button type="button" :class="{ active: activePeriod === 'day' }" @click="activePeriod = 'day'">
-                Day
+            <div class="period-switch" role="tablist" aria-label="Exposure and colour period">
+              <button
+                v-for="option in PERIODS"
+                :key="option.id"
+                type="button"
+                role="tab"
+                :aria-selected="activePeriod === option.id"
+                class="period-tab"
+                :class="{ active: activePeriod === option.id }"
+                @click="selectPeriod(option.id)"
+              >
+                <span class="period-tab-icon" aria-hidden="true">{{ option.icon }}</span>
+                <span class="period-tab-label">{{ option.label }}</span>
+                <span v-if="livePeriod === option.id" class="period-tab-now">now</span>
               </button>
             </div>
+
+            <p class="field-hint">
+              <template v-if="!livePeriod">
+                Editing the {{ activePeriod }} profile.
+              </template>
+              <template v-else-if="livePeriod === activePeriod">
+                Editing the {{ activePeriod }} profile — the one the node is using right now.
+              </template>
+              <template v-else>
+                The node is on {{ livePeriod }} right now, so these {{ activePeriod }} values
+                take effect at the next {{ activePeriod === 'day' ? 'sunrise' : 'sunset' }}.
+              </template>
+            </p>
 
             <div class="period-card">
               <div class="field-grid">
@@ -419,5 +468,13 @@ const STORAGE_KEYS = [
         </section>
       </div>
     </template>
+
+    <!-- Outside the node branch: these are about the server and the account, not
+         about whichever camera happens to be selected, and they have to stay
+         reachable when there are no nodes at all. -->
+    <div class="settings-grid">
+      <SecurityControls />
+      <AccessControls />
+    </div>
   </div>
 </template>

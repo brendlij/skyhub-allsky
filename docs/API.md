@@ -20,19 +20,22 @@ All examples assume `http://skyhub.local:8000`. Replace it with your server.
 
 ## Authentication
 
-Authentication is **off by default**. A server with no key set answers every
-request, which is the behaviour a LAN-only install has always had.
+Two credentials, kept apart on purpose. Full detail in [AUTH.md](AUTH.md); this is
+what a client author needs.
 
-To turn it on, set an API key on the server and restart it:
+**Humans** sign in to the web UI with a username, a password and a TOTP code, and
+carry a server-side session in an HttpOnly cookie. **Machines** — camera nodes,
+Home Assistant, your scripts — carry the shared API key. A node cannot answer a
+two-factor prompt, which is why it gets a plain string; that string is never
+accepted for account management.
+
+### API key
 
 ```bash
 SKYHUB_SERVER_API_KEY=pick-something-long-and-random python skyhub.py server
 ```
 
-With a key set, every `/api/*` route and both WebSockets require it. `/health` stays
-open so uptime monitoring does not need a credential.
-
-Three ways to present the key, because clients differ in what they can send:
+Three ways to present it, because clients differ in what they can send:
 
 ```bash
 curl -H "X-API-Key: $KEY"            http://skyhub.local:8000/api/nodes   # preferred
@@ -43,8 +46,41 @@ curl "http://skyhub.local:8000/api/nodes?api_key=$KEY"                    # <img
 Prefer a header. The query parameter exists because an `<img src>` and a browser
 `WebSocket` cannot set headers, but it ends up in server logs and browser history.
 
-A missing or wrong key gets `401` with `{"detail": "Invalid or missing API key"}`;
-a WebSocket handshake is closed with code `1008` before it is accepted.
+By default the key opens every `/api` route, which is what existing automation
+depends on. Set `SKYHUB_SERVER_API_KEY_NODES_ONLY=true` to restrict it to
+`/api/captures/upload` and the node WebSocket.
+
+The key is **never** accepted for `/api/auth/password`, `/api/auth/totp/reset`,
+`/api/auth/sessions` or `/api/auth/devices` — those need a signed-in browser, and
+return `401` to a key regardless of configuration.
+
+A missing or wrong credential gets `401`; a WebSocket handshake is closed with code
+`1008` before it is accepted.
+
+With no key set at all, camera nodes connect unauthenticated. Your own login is
+unaffected — the web UI always requires one.
+
+### Session cookie
+
+Obtained by `POST /api/auth/login` then `POST /api/auth/totp`. The browser attaches
+it to same-origin requests, including `<img>` loads and the dashboard WebSocket, so
+a logged-in UI signs nothing.
+
+State-changing requests made with a cookie must carry `X-CSRF-Token`, read from the
+`skyhub_csrf` cookie. Requests authenticated by API key do not need it — an API key
+is not a credential a browser attaches by itself.
+
+### /health
+
+Public, and deliberately bare — it must not help anyone decide whether this server
+is worth attacking:
+
+```json
+{ "status": "ok" }
+```
+
+The UI asks `/api/auth/status` for what it needs; nodes learn about the key by
+being rejected.
 
 ### Configuring the clients
 
@@ -54,8 +90,9 @@ a WebSocket handshake is closed with code `1008` before it is accepted.
 SKYHUB_NODE_API_KEY=$KEY python skyhub.py node --node-id roof-pi
 ```
 
-**The web UI** prompts for the key the first time the server answers `401` and
-stores it in that browser's `localStorage`. Clearing site data asks again.
+**The web UI** signs in with the admin account. Settings → **Security** manages the
+password, the authenticator, active sessions and sign-out; Settings → **Node access**
+reports whether an API key is configured for machines.
 
 ### Sharing the image without sharing control
 
@@ -517,8 +554,11 @@ Retention: `day_capture_enabled`, `night_capture_enabled`, `retention_days`,
 `ws://<server>:8000/ws/dashboard`
 
 Push instead of poll — the same feed the web UI runs on. Send nothing; just read
-JSON messages. With authentication on, pass `?api_key=…` (browsers) or an
-`X-API-Key` header (everything else).
+JSON messages.
+
+A signed-in browser needs no credential here: the session cookie rides along on the
+handshake. A headless client passes an `X-API-Key` header, or `?api_key=…` if it
+cannot set one.
 
 | `type` | Fires when | Carries |
 |---|---|---|
