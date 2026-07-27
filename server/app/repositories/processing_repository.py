@@ -1,5 +1,13 @@
 """Persistence for the processing pipeline: settings, sessions and products."""
 
+# Required, not stylistic: DerivedProductRepository defines a method called
+# `list`, which shadows the builtin inside the class body. Without deferred
+# annotations, `-> list[DerivedProduct]` on any method declared after it is
+# evaluated eagerly and resolves to that method, so the module fails to import
+# with "'function' object is not subscriptable" on Python 3.13 and earlier.
+# Python 3.14 evaluates annotations lazily (PEP 649) and hides the problem.
+from __future__ import annotations
+
 from datetime import datetime, timezone
 from typing import Any
 
