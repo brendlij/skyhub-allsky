@@ -41,6 +41,10 @@ NODE_ID = "test-node"
 ARCHIVE_DATE = "2026-07-27"
 PERIOD = "night"
 FRAME_COUNT = 12
+# Blown-out twilight frames fed at the head of the night, the way a real session
+# starts: it opens at sunset, and a fixed night exposure makes those frames white.
+TWILIGHT_COUNT = 3
+TOTAL_FRAMES = FRAME_COUNT + TWILIGHT_COUNT
 FRAME_SIZE = (320, 240)
 
 failures: list[str] = []
@@ -71,6 +75,21 @@ def make_frame(index: int, directory: Path) -> Path:
     draw.rectangle([0, 200, FRAME_SIZE[0], 240], fill=(index * 15, index * 8, 40))
 
     path = directory / f"frame_{index:04d}.jpg"
+    image.save(path, format="JPEG", quality=92)
+
+    return path
+
+
+def make_twilight_frame(index: int, directory: Path) -> Path:
+    """A frame the way a fixed night exposure renders a sky the sun is still in.
+
+    Near white. One of these reaching a lighten stack whites out the entire
+    night, permanently, which is exactly what the dusk-to-dawn gate exists to
+    prevent - so the test needs a frame that would be unmistakable if it got in.
+    """
+    image = Image.new("RGB", FRAME_SIZE, (250, 250, 245))
+
+    path = directory / f"twilight_{index:04d}.jpg"
     image.save(path, format="JPEG", quality=92)
 
     return path
@@ -117,7 +136,26 @@ async def main() -> int:
     await pipeline.start(broadcast=broadcast)
 
     print("\nfeeding a night")
-    captured_at = datetime(2026, 7, 27, 22, 0, tzinfo=timezone.utc)
+    # 01:00 local at the configured site, which is inside astronomical night on
+    # this date. The twilight frames below are timestamped four hours earlier, in
+    # the evening the session opened, so the startrail's gate has to reject them.
+    captured_at = datetime(2026, 7, 27, 23, 0, tzinfo=timezone.utc)
+    twilight_at = captured_at - timedelta(hours=4)
+
+    for index in range(TWILIGHT_COUNT):
+        path = make_twilight_frame(index, frame_dir)
+        pipeline.publish(
+            FrameEvent(
+                node_id=NODE_ID,
+                archive_date=ARCHIVE_DATE,
+                period=PERIOD,
+                captured_at=twilight_at + timedelta(minutes=index),
+                rendered_path=path,
+                original_path=path,
+                width=FRAME_SIZE[0],
+                height=FRAME_SIZE[1],
+            )
+        )
 
     for index in range(FRAME_COUNT):
         path = make_frame(index, frame_dir)
@@ -137,14 +175,14 @@ async def main() -> int:
     # Wait for the worker to drain rather than sleeping a guessed interval.
     await pipeline._queue.join()
 
-    check("every frame was processed", pipeline.stats()["processed"] == FRAME_COUNT, str(pipeline.stats()))
+    check("every frame was processed", pipeline.stats()["processed"] == TOTAL_FRAMES, str(pipeline.stats()))
     check("nothing was dropped", pipeline.stats()["dropped"] == 0)
 
     with SessionLocal() as db:
         session = ProcessingSessionRepository(db).get(f"{NODE_ID}/{ARCHIVE_DATE}/{PERIOD}")
 
     check("the session is open", session is not None and session.status == "open")
-    check("the session counted the frames", session.frame_count == FRAME_COUNT, str(session.frame_count))
+    check("the session counted the frames", session.frame_count == TOTAL_FRAMES, str(session.frame_count))
 
     print("\nlive products")
     derived = settings.derived_dir / NODE_ID / ARCHIVE_DATE / PERIOD
@@ -159,15 +197,22 @@ async def main() -> int:
 
     check("live products are registered", {"startrail_live", "keogram_live"} <= set(products), str(sorted(products)))
     check("live products are marked live", products["startrail_live"].state == "live")
+    # The keogram takes every frame. Twilight is part of what a keogram is for -
+    # the gate belongs to the startrail alone, not to the pipeline.
     check(
         "the keogram counted a column per frame",
-        products["keogram_live"].frame_count == FRAME_COUNT,
+        products["keogram_live"].frame_count == TOTAL_FRAMES,
         str(products["keogram_live"].frame_count),
     )
     check(
         "the keogram is column_width * frames wide",
-        products["keogram_live"].width == FRAME_COUNT * 2,
+        products["keogram_live"].width == TOTAL_FRAMES * 2,
         str(products["keogram_live"].width),
+    )
+    check(
+        "the startrail counted only the frames it stacked",
+        products["startrail_live"].frame_count == FRAME_COUNT,
+        str(products["startrail_live"].frame_count),
     )
 
     print("\nthe stack really is a maximum")
@@ -192,22 +237,33 @@ async def main() -> int:
         sum(sum(p) for p in stacked.getdata()) > sum(sum(p) for p in single.resize(stacked.size).getdata()),
     )
 
+    print("\ntwilight is kept out of the stack")
+    # The single check the whole gate exists for. One white frame in a per-pixel
+    # maximum is unrecoverable, so if any of the three got through, the average
+    # here is near 255 rather than near the night sky's own darkness.
+    average = sum(sum(pixel) for pixel in stacked.getdata()) / (stacked.width * stacked.height * 3)
+    check("the stack did not blow out", average < 64, f"mean channel {average:.1f}")
+
     print("\nbuild frames accumulate")
     build_dir = settings.processing_state_dir / NODE_ID / ARCHIVE_DATE / PERIOD / "startrail_build" / "build"
     build_frames = sorted(build_dir.glob("frame_*.jpg"))
-    check("one build frame per capture", len(build_frames) == FRAME_COUNT, str(len(build_frames)))
+    check(
+        "a build frame per stacked capture, not per capture",
+        len(build_frames) == FRAME_COUNT,
+        str(len(build_frames)),
+    )
 
     print("\ntimelapse manifest, not an archive scan")
     manifest = settings.processing_state_dir / NODE_ID / ARCHIVE_DATE / PERIOD / "timelapse" / "frames.txt"
     check("the manifest was appended per frame", manifest.is_file())
     check(
         "the manifest has one line per capture",
-        len(manifest.read_text(encoding="utf-8").strip().splitlines()) == FRAME_COUNT,
+        len(manifest.read_text(encoding="utf-8").strip().splitlines()) == TOTAL_FRAMES,
     )
 
     print("\ndashboard events")
     product_events = [event for event in events if event["type"] == "processing.products"]
-    check("live updates were announced", len(product_events) == FRAME_COUNT, str(len(product_events)))
+    check("live updates were announced", len(product_events) == TOTAL_FRAMES, str(len(product_events)))
 
     print("\nfinalising")
     result = await pipeline.close_session(NODE_ID, ARCHIVE_DATE, PERIOD)
@@ -223,7 +279,28 @@ async def main() -> int:
 
     check("the session is closed", closed.status == "closed", closed.status)
     check("final products are marked final", final["startrail"].state == "final")
-    check("the final keogram kept every column", final["keogram"].frame_count == FRAME_COUNT)
+    check("the final keogram kept every column", final["keogram"].frame_count == TOTAL_FRAMES)
+    check(
+        "the final startrail counts stacked frames only",
+        final["startrail"].frame_count == FRAME_COUNT,
+        str(final["startrail"].frame_count),
+    )
+    check(
+        "the skipped frames are recorded on the product",
+        (final["startrail"].product_metadata or {}).get("frames_skipped") == TWILIGHT_COUNT,
+        str(final["startrail"].product_metadata),
+    )
+    check(
+        "the dark window is recorded on the product",
+        "dark_from" in (final["startrail"].product_metadata or {}),
+        str(sorted(final["startrail"].product_metadata or {})),
+    )
+    check(
+        "the working counts were cleaned up",
+        not (
+            settings.processing_state_dir / NODE_ID / ARCHIVE_DATE / PERIOD / "startrail" / "counts.json"
+        ).is_file(),
+    )
     check("working state was cleaned up", not (
         settings.processing_state_dir / NODE_ID / ARCHIVE_DATE / PERIOD / "startrail" / "stack.png"
     ).is_file())

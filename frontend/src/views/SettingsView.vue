@@ -4,6 +4,7 @@ import AccessControls from "../components/AccessControls.vue";
 import ColourControls from "../components/ColourControls.vue";
 import ProcessingControls from "../components/ProcessingControls.vue";
 import SecurityControls from "../components/SecurityControls.vue";
+import SiteControls from "../components/SiteControls.vue";
 import MaskControls from "../components/MaskControls.vue";
 import EmptyState from "../components/ui/EmptyState.vue";
 import { formatBytes } from "../api/skyhub";
@@ -162,7 +163,7 @@ const STORAGE_KEYS = [
     <div class="page-head">
       <div class="page-head-text">
         <h1>Settings</h1>
-        <p>Camera, colour, hardware and storage for the selected node — plus your account and this server's access</p>
+        <p>Camera, colour, hardware and storage for the selected node — plus this server's location, your account and its access</p>
       </div>
     </div>
 
@@ -474,6 +475,7 @@ const STORAGE_KEYS = [
          about whichever camera happens to be selected, and they have to stay
          reachable when there are no nodes at all. -->
     <div class="settings-grid">
+      <SiteControls />
       <ProcessingControls />
       <SecurityControls />
       <AccessControls />

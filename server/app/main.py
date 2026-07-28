@@ -1,6 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import json
 import re
 import shutil
@@ -21,7 +21,9 @@ from PIL import Image
 
 from app.db.database import SessionLocal, create_db_tables, get_db_session
 from app.config import get_settings
+from app import astro
 from app.repositories.capture_storage_settings_repository import CaptureStorageSettingsRepository
+from app.repositories.site_settings_repository import SiteSettingsRepository
 from app.repositories.node_repository import NodeRepository
 from app.repositories.node_camera_settings_repository import NodeCameraSettingsRepository
 from app.repositories.node_capture_state_repository import NodeCaptureStateRepository
@@ -744,6 +746,92 @@ async def list_nodes(db: Session = Depends(get_db_session)):
     }
 
 
+class SiteSettingsUpdate(BaseModel):
+    label: str | None = Field(default=None, max_length=120)
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    elevation_m: float | None = Field(default=None, ge=-500, le=9000)
+    timezone: str | None = Field(default=None, max_length=80)
+
+
+def site_settings_to_dict(site) -> dict:
+    return {
+        "label": site.label or "",
+        "latitude": site.latitude,
+        "longitude": site.longitude,
+        "elevation_m": site.elevation_m,
+        "timezone": site.timezone,
+        "updated_at": site.updated_at.isoformat() if site.updated_at else None,
+    }
+
+
+def sun_times_to_dict(on_date: date | None = None) -> dict:
+    """What the configured location means for tonight, for the settings page.
+
+    Coordinates are four decimal places of abstraction: a map pin does not tell
+    an operator whether the startrail will have anything to stack. Sunset and
+    astronomical dusk do, so the answer is computed where the location is set
+    rather than left to be discovered a night later.
+    """
+    night = on_date or datetime.now(astro.local_zone()).date()
+    window = astro.dark_window(night)
+
+    times = {
+        "date": night.isoformat(),
+        "timezone": astro.timezone_name(),
+        "dark_from": window[0].isoformat() if window else None,
+        "dark_until": window[1].isoformat() if window else None,
+        "dark_hours": round((window[1] - window[0]).total_seconds() / 3600, 2) if window else 0.0,
+    }
+
+    try:
+        today_sun = sun(astro.observer(), date=night, tzinfo=astro.local_zone())
+        times["sunset"] = today_sun["sunset"].isoformat()
+        times["sunrise"] = today_sun["sunrise"].isoformat()
+
+    except Exception:
+        # Polar day or night. The dark window above is the answer that matters
+        # and it has already been computed.
+        times["sunset"] = None
+        times["sunrise"] = None
+
+    return times
+
+
+@app.get("/api/settings/site")
+async def get_site_settings(db: Session = Depends(get_db_session)):
+    site = SiteSettingsRepository(db).get_or_create()
+
+    return {"site": site_settings_to_dict(site), "sun": sun_times_to_dict()}
+
+
+@app.put("/api/settings/site")
+async def update_site_settings(
+    request: SiteSettingsUpdate,
+    db: Session = Depends(get_db_session),
+):
+    values = request.model_dump(exclude_unset=True, exclude_none=True)
+
+    if "timezone" in values:
+        try:
+            ZoneInfo(values["timezone"])
+
+        except (ValueError, KeyError):
+            raise HTTPException(status_code=400, detail=f"Unknown timezone: {values['timezone']}")
+
+    site = SiteSettingsRepository(db).update(values)
+
+    # Everything that asks where the camera is reads through the cache, so it has
+    # to be dropped before the next capture computes a sun position.
+    astro.invalidate()
+
+    payload = {"site": site_settings_to_dict(site), "sun": sun_times_to_dict()}
+
+    await connections.broadcast_dashboard({"type": "site.settings.updated", **payload})
+
+    return payload
+
+
 class CaptureStorageSettingsUpdate(BaseModel):
     day_capture_enabled: bool | None = None
     night_capture_enabled: bool | None = None
@@ -1003,21 +1091,21 @@ def parse_iso_datetime(value: str | None) -> datetime | None:
 
 
 def capture_location() -> LocationInfo:
-    return LocationInfo(
-        name="SkyHub",
-        region="",
-        timezone=settings.timezone,
-        latitude=settings.latitude,
-        longitude=settings.longitude,
-    )
+    """The configured site. Set in the UI, not in the environment.
+
+    Kept as a function rather than inlined at the call sites so that saving a new
+    location takes effect on the next capture - `astro` caches the row and drops
+    the cache when it is written.
+    """
+    return astro.location()
 
 
 def capture_observer():
-    return capture_location().observer
+    return astro.observer()
 
 
 def archive_period(captured_at: datetime) -> tuple[str, str]:
-    local_timezone = ZoneInfo(settings.timezone)
+    local_timezone = astro.local_zone()
     local_time = captured_at.astimezone(local_timezone)
     location = capture_location()
 
@@ -1486,9 +1574,9 @@ def overlay_preview_values(node_id: str | None, db: Session) -> dict:
 
     context = {
         "node_id": node_id,
-        "captured_at": captured_at.astimezone(ZoneInfo(settings.timezone)),
+        "captured_at": captured_at.astimezone(astro.local_zone()),
         "period": period,
-        "timezone_name": settings.timezone,
+        "timezone_name": astro.timezone_name(),
         "environment": environment,
         "heater": heater_state,
         "camera_settings": camera_settings,
@@ -2200,7 +2288,7 @@ async def upload_capture(
         node_id=node_id,
         captured_at=captured_at,
         period=period,
-        timezone_name=settings.timezone,
+        timezone_name=astro.timezone_name(),
         environment=environment,
         heater=heater_state,
         camera_settings=camera_settings,

@@ -52,6 +52,11 @@ const environmentTelemetry = ref(null);
 const heaterState = ref(null);
 const storageStats = ref(null);
 const storageSettings = ref(null);
+const siteSettings = ref(null);
+// What the site means for tonight - sunset, sunrise, and how long the sky is
+// astronomically dark. Computed by the server, because it is the same astral
+// calculation the startrail gates on and the two must not disagree.
+const sunTimes = ref(null);
 const loading = ref(false);
 // "live" | "connecting" | "offline" - previously the socket could drop and
 // reconnect forever with nothing in the UI to say the data had gone stale.
@@ -213,6 +218,13 @@ async function loadStorageSettings() {
   storageSettings.value = await requestJson("/api/storage/settings");
 }
 
+async function loadSiteSettings() {
+  const result = await requestJson("/api/settings/site");
+
+  siteSettings.value = result.site;
+  sunTimes.value = result.sun;
+}
+
 async function loadLatest() {
   if (!selectedNodeId.value) {
     latest.value = null;
@@ -317,7 +329,8 @@ async function refreshDashboard() {
     await loadAll([
       ...nodeScopedLoaders(),
       ["storage usage", loadStorageStats],
-      ["storage policy", loadStorageSettings]
+      ["storage policy", loadStorageSettings],
+      ["site", loadSiteSettings]
     ]);
   } finally {
     loading.value = false;
@@ -464,6 +477,24 @@ function saveStorageSettings() {
   });
 }
 
+function saveSiteSettings() {
+  if (!siteSettings.value) return Promise.resolve();
+
+  return runAction("site", "Could not save the location", async () => {
+    const result = await putJson("/api/settings/site", {
+      label: siteSettings.value.label || "",
+      latitude: Number(siteSettings.value.latitude),
+      longitude: Number(siteSettings.value.longitude),
+      elevation_m: Number(siteSettings.value.elevation_m) || 0,
+      timezone: siteSettings.value.timezone
+    });
+
+    siteSettings.value = result.site;
+    sunTimes.value = result.sun;
+    notify("Location saved");
+  });
+}
+
 function startCapture() {
   if (!selectedNodeId.value) return Promise.resolve();
 
@@ -562,6 +593,12 @@ function handleDashboardEvent(event) {
   if (event.type === "storage.settings.updated") {
     storageSettings.value = event.storage_settings;
     loadStorageStats().catch(() => {});
+    return;
+  }
+
+  if (event.type === "site.settings.updated") {
+    siteSettings.value = event.site;
+    sunTimes.value = event.sun;
     return;
   }
 
@@ -727,6 +764,8 @@ export function useSkyHub() {
     heaterState,
     storageStats,
     storageSettings,
+    siteSettings,
+    sunTimes,
     loading,
     busy,
     connectionState,
@@ -739,12 +778,14 @@ export function useSkyHub() {
     loadEnvironmentTelemetry,
     loadHeaterState,
     loadOverlays,
+    loadSiteSettings,
     loadStorageSettings,
     loadStorageStats,
     refreshDashboard,
     saveSettings,
     saveDeviceSettings,
     saveOverlays,
+    saveSiteSettings,
     saveStorageSettings,
     selectNode,
     setHeaterEnabled,

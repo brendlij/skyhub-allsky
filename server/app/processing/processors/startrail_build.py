@@ -112,6 +112,14 @@ class StartrailBuildProcessor(Processor):
             # to animate, and nothing to complain about.
             return ()
 
+        # The startrail rejects frames from either end of the night, when the sun
+        # is still up far enough to wash the sky out. Those frames leave the stack
+        # untouched, so animating them would open the video with a still image
+        # held for the length of twilight. Default True: a startrail from before
+        # this existed publishes no such key and every frame counted.
+        if not session.consume("startrail", "frame_used", True):
+            return ()
+
         frames: list[Path] = session.state["frames"]
 
         # Even dimensions here rather than in ffmpeg's filter: every frame must
