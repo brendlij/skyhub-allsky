@@ -14,7 +14,7 @@ the database and astral, and everyone reads it.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from threading import Lock
 from zoneinfo import ZoneInfo
 
@@ -168,6 +168,35 @@ def sun_elevation(moment: datetime) -> float | None:
     except Exception as error:
         logger.warning("astro.elevation_failed", moment=moment.isoformat(), error=str(error))
         return None
+
+
+def archive_period(moment: datetime) -> tuple[str, str]:
+    """Which archive a capture belongs in: its date, and "day" or "night".
+
+    Sunrise and sunset at the configured site, nothing else. A capture after
+    sunset belongs to the night that started that evening; one before sunrise
+    belongs to the night that started the evening before, which is why the date
+    is returned alongside rather than left to the caller to guess.
+
+    Lives here rather than in `main` because the pipeline needs it too, and
+    `main` imports the pipeline.
+    """
+    zone = local_zone()
+    local_time = moment.astimezone(zone)
+    today = astral_sun.sun(observer(), date=local_time.date(), tzinfo=zone)
+
+    if today["sunrise"] <= local_time < today["sunset"]:
+        return local_time.date().isoformat(), "day"
+
+    if local_time >= today["sunset"]:
+        return local_time.date().isoformat(), "night"
+
+    return (local_time.date() - timedelta(days=1)).isoformat(), "night"
+
+
+def current_period() -> str:
+    """"day" or "night", right now."""
+    return archive_period(datetime.now(timezone.utc))[1]
 
 
 def current_night(moment: datetime | None = None) -> date:

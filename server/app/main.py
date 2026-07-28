@@ -1114,23 +1114,7 @@ def capture_observer():
 
 
 def archive_period(captured_at: datetime) -> tuple[str, str]:
-    local_timezone = astro.local_zone()
-    local_time = captured_at.astimezone(local_timezone)
-    location = capture_location()
-
-    today_sun = sun(location.observer, date=local_time.date(), tzinfo=local_timezone)
-    sunrise = today_sun["sunrise"]
-    sunset = today_sun["sunset"]
-
-    if sunrise <= local_time < sunset:
-        return local_time.date().isoformat(), "day"
-
-    if local_time >= sunset:
-        return local_time.date().isoformat(), "night"
-
-    previous_day = local_time.date()
-    previous_day = previous_day.fromordinal(previous_day.toordinal() - 1)
-    return previous_day.isoformat(), "night"
+    return astro.archive_period(captured_at)
 
 
 def camera_settings_to_dict(camera_settings) -> dict:
@@ -1230,7 +1214,7 @@ def capture_storage_settings_to_dict(storage_settings) -> dict:
 
 
 def current_period() -> str:
-    return archive_period(datetime.now(timezone.utc))[1]
+    return astro.current_period()
 
 
 def capture_settings_for_period(camera_settings, period: str) -> dict:

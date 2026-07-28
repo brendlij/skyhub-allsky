@@ -69,6 +69,11 @@ class SessionOpenRequest(SessionCloseRequest):
     label: str | None = Field(default=None, max_length=120)
 
 
+class RunStartRequest(BaseModel):
+    node_id: str = Field(min_length=1, max_length=100)
+    label: str | None = Field(default=None, max_length=120)
+
+
 class RetentionUpdate(BaseModel):
     node_id: str | None = Field(default=None, max_length=100)
     keep_days: int | None = Field(default=None, ge=1, le=36500)
@@ -241,6 +246,18 @@ async def open_session(payload: SessionOpenRequest) -> dict:
     return await pipeline.open_manual_session(
         payload.node_id, payload.archive_date, payload.period, payload.label
     )
+
+
+@router.post("/runs/start")
+async def start_run(payload: RunStartRequest) -> dict:
+    """Collect into a fresh session from now, whatever the sun is doing.
+
+    The counterpart to finalising early: having encoded the night so far, this
+    starts another one rather than letting the next capture reopen the session
+    that was just finished. A node can have one run at a time - starting a
+    second finalises the first.
+    """
+    return await pipeline.start_run(payload.node_id, payload.label)
 
 
 @router.get("/retention")

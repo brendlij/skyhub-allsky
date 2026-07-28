@@ -29,6 +29,7 @@ from typing import Any, Awaitable, Callable, Iterable
 
 import structlog
 
+from app import astro
 from app.config import get_settings
 from app.db.database import SessionLocal
 from app.processing.base import (
@@ -64,13 +65,36 @@ def utc_now() -> datetime:
 class _Session:
     """A live session: its database key plus one context per active processor."""
 
-    def __init__(self, node_id: str, archive_date: str, period: str, session_kind: str = "solar"):
+    def __init__(
+        self,
+        node_id: str,
+        archive_date: str,
+        period: str,
+        session_kind: str = "solar",
+        solar_period: str | None = None,
+    ):
         self.node_id = node_id
         self.archive_date = archive_date
         self.period = period
         # How the session is driven: "solar" opens and closes with the sun,
         # anything else only by explicit request.
         self.session_kind = session_kind
+        # Which processors this session runs: "day" or "night". Usually the same
+        # as `period`, and different only for a run started by hand, whose period
+        # carries the time it started - "night-2312" - to keep it off an
+        # already-finalised session's key.
+        #
+        # Defaulting to the part before the dash rather than to the whole period
+        # is what lets a run be rebuilt from nothing but its key: the session
+        # rehydrated to finalise a run after a restart, and the one reopened by
+        # the next capture, both get their processors back without anyone having
+        # to remember what the run was. A plain "night" is its own prefix, so
+        # solar sessions are unaffected.
+        #
+        # A run keeps this for its whole life, so one carried past sunrise goes
+        # on running the night's processors rather than quietly changing what it
+        # is halfway through.
+        self.solar_period = solar_period or period.split("-")[0]
         self.key = session_key_for(node_id, archive_date, period)
         self.contexts: dict[str, SessionContext] = {}
         # The order processors run in, dependencies first. Computed once when the
@@ -100,6 +124,10 @@ class ProcessingPipeline:
         self._progress = ProgressTracker(on_change=self._on_progress)
         self._dropped = 0
         self._processed = 0
+        # Nodes with a run started by hand, and the session their frames go to
+        # instead of the sun's. One per node: starting a second run finalises the
+        # first, because a frame can only belong to one session.
+        self._runs: dict[str, tuple[str, str, str]] = {}
 
     def _on_progress(self, session_key: str, processor: str, state: ProgressState) -> None:
         """Persist and publish a progress change.
@@ -254,11 +282,47 @@ class ProcessingPipeline:
 
     # ---- frame handling (worker thread) ----
 
-    def _handle_frame(self, frame: FrameEvent) -> list[tuple[str, ProductDraft]]:
+    def _target_session(self, frame: FrameEvent) -> _Session:
+        """The session this frame belongs to.
+
+        Normally the one the sun implies, which is the key the frame carries. A
+        run started by hand takes precedence for as long as it is open: that is
+        what "start collecting again, now" means - the frames have to go
+        somewhere other than the session that was just finalised, or they would
+        reopen it and version their products over the finished ones.
+        """
+        run = self._runs.get(frame.node_id)
+
+        if run is not None:
+            key = session_key_for(*run)
+            session = self._sessions.get(key)
+
+            if session is not None:
+                return session
+
+            # Registered but not loaded: a restart put the run back in the map
+            # from the database without opening it. Open it now and it resumes
+            # from its own working state, exactly as a solar session does.
+            with SessionLocal() as db:
+                record = ProcessingSessionRepository(db).get(key)
+
+            if record is not None and record.status == "open":
+                return self._open_session(*run, "manual", record.label)
+
+            # Closed behind our back, or gone. Stop redirecting; the sun's
+            # session is the safe default.
+            logger.info("processing.run_ended", node_id=frame.node_id, session=key)
+            self._runs.pop(frame.node_id, None)
+
         session = self._sessions.get(frame.session_key)
 
         if session is None:
             session = self._open_session(frame.node_id, frame.archive_date, frame.period)
+
+        return session
+
+    def _handle_frame(self, frame: FrameEvent) -> list[tuple[str, ProductDraft]]:
+        session = self._target_session(frame)
 
         produced: list[tuple[str, ProductDraft]] = []
 
@@ -267,7 +331,10 @@ class ProcessingPipeline:
 
         self._collect_ambient(session, frame)
 
-        for name, processor, context in self._active(session, frame.period):
+        # The session's own day/night, not the frame's. They are the same for a
+        # solar session by construction, and for a run it is the one the run was
+        # started under.
+        for name, processor, context in self._active(session, session.solar_period):
             context.frame_count += 1
 
             try:
@@ -355,9 +422,10 @@ class ProcessingPipeline:
         period: str,
         session_kind: str = "solar",
         label: str | None = None,
+        solar_period: str | None = None,
     ) -> _Session:
         settings = get_settings()
-        session = _Session(node_id, archive_date, period, session_kind)
+        session = _Session(node_id, archive_date, period, session_kind, solar_period)
 
         with SessionLocal() as db:
             repository = ProcessingSessionRepository(db)
@@ -374,7 +442,7 @@ class ProcessingPipeline:
             configs: dict[str, dict[str, Any]] = {}
 
             for name, processor_class in registered_processors().items():
-                if not processor_class.runs_for(period):
+                if not processor_class.runs_for(session.solar_period):
                     continue
 
                 stored = settings_repo.get_or_create(processor_class)
@@ -463,6 +531,94 @@ class ProcessingPipeline:
             "label": label,
         }
 
+    def _free_run_period(self, node_id: str, archive_date: str, solar_period: str) -> str:
+        """A period for a new run that no session already owns.
+
+        The minute a run started is enough to tell two runs apart and reads well
+        in the products directory - "night-2312". Two runs inside one minute
+        would collide though, and a collision here is not a harmless one: opening
+        a session on an existing key *reopens* it, so the second run would
+        silently continue the first one it was meant to replace, and version its
+        products over the ones just finalised. Seconds, then a counter, until the
+        key is genuinely free.
+        """
+        started = datetime.now(astro.local_zone())
+        candidates = [f"{solar_period}-{started:%H%M}", f"{solar_period}-{started:%H%M%S}"]
+        candidates += [f"{solar_period}-{started:%H%M%S}-{suffix}" for suffix in range(2, 12)]
+
+        with SessionLocal() as db:
+            repository = ProcessingSessionRepository(db)
+
+            for period in candidates:
+                key = session_key_for(node_id, archive_date, period)
+
+                if key not in self._sessions and repository.get(key) is None:
+                    return period
+
+        # Every candidate taken is not a situation worth inventing a recovery
+        # for; the last one is as good as anything and the caller will see it.
+        return candidates[-1]
+
+    async def start_run(self, node_id: str, label: str | None = None) -> dict[str, Any]:
+        """Start collecting again, from now, whatever the sun is doing.
+
+        The session a night produces closes at sunrise, and finalising it early
+        is a one-way door: the products are written and the next capture would
+        reopen the same session and version its products over them. This opens a
+        *new* session instead, so a night can hold several runs - change a
+        setting, finalise, start again, and compare the two startrails side by
+        side without waiting for tomorrow.
+
+        The run takes the sun's current day or night for its processors, so one
+        started after dark stacks startrails and one started at noon does not.
+        It keeps that decision for its whole life: a run carried through sunrise
+        goes on being a night run rather than changing what it is halfway
+        through. Nothing closes it but the operator.
+
+        The key is the sun's period plus the local time it started - "night-2312"
+        - which keeps it off the finalised session's key, sorts in the order the
+        runs happened, and reads as what it is in the products directory.
+        """
+        archive_date, solar_period = astro.archive_period(utc_now())
+
+        # One run per node: a frame belongs to exactly one session, so a second
+        # run has to end the first. Finalising rather than abandoning it, so its
+        # products are written instead of stranded.
+        previous = self._runs.get(node_id)
+        finalised = None
+
+        if previous is not None:
+            finalised = await self.close_session(*previous)
+
+        period = await asyncio.to_thread(self._free_run_period, node_id, archive_date, solar_period)
+        key = session_key_for(node_id, archive_date, period)
+
+        session = await asyncio.to_thread(
+            self._open_session, node_id, archive_date, period, "manual", label, solar_period
+        )
+
+        self._runs[node_id] = (node_id, archive_date, period)
+
+        await self._announce_status(node_id, archive_date, period, "open")
+
+        logger.info(
+            "processing.run_started",
+            session=key,
+            solar_period=solar_period,
+            processors=session.order,
+        )
+
+        return {
+            "session": key,
+            "status": "open",
+            "archive_date": archive_date,
+            "period": period,
+            "solar_period": solar_period,
+            "processors": list(session.order),
+            "label": label,
+            "replaced": finalised["session"] if finalised else None,
+        }
+
     async def close_session(self, node_id: str, archive_date: str, period: str) -> dict[str, Any]:
         """Finalise a session: run every processor's expensive step, then release it.
 
@@ -491,6 +647,11 @@ class ProcessingPipeline:
         await asyncio.to_thread(product_manager.settle_session, key)
 
         self._sessions.pop(key, None)
+
+        # A finalised run stops claiming the node's frames; the next capture goes
+        # back to the sun's session until another run is started.
+        if self._runs.get(node_id) == (node_id, archive_date, period):
+            self._runs.pop(node_id, None)
 
         with SessionLocal() as db:
             ProcessingSessionRepository(db).set_status(
@@ -578,6 +739,14 @@ class ProcessingPipeline:
             open_sessions = ProcessingSessionRepository(db).list_open()
 
         for record in open_sessions:
+            # A run that was collecting when the server stopped goes on
+            # collecting. Without this the redirect is lost, the node's frames
+            # quietly return to the sun's session, and the run sits open and
+            # empty until someone notices - a restart should not end something
+            # only the operator is supposed to end.
+            if record.session_kind == "manual" and record.period != record.period.split("-")[0]:
+                self._runs[record.node_id] = (record.node_id, record.archive_date, record.period)
+
             logger.info(
                 "processing.session_pending",
                 session=record.session_key,

@@ -453,6 +453,154 @@ async def main() -> int:
 
     await wide_pipeline.stop()
 
+    print("\nstarting a run after finalising")
+    run_pipeline = ProcessingPipeline()
+    await run_pipeline.start(broadcast=broadcast)
+
+    run_date = "2026-08-05"
+    run_dir = Path(_TEMP_DIR) / "captures" / NODE_ID / run_date / PERIOD
+    run_dir.mkdir(parents=True, exist_ok=True)
+    run_at = datetime(2026, 8, 5, 23, 0, tzinfo=timezone.utc)
+
+    # A first session, finalised early - the state the operator is in when they
+    # want to start again.
+    for index in range(3):
+        run_pipeline.publish(
+            FrameEvent(
+                node_id=NODE_ID,
+                archive_date=run_date,
+                period=PERIOD,
+                captured_at=run_at + timedelta(minutes=index),
+                rendered_path=make_frame(index, run_dir),
+            )
+        )
+
+    await run_pipeline._queue.join()
+    await run_pipeline.close_session(NODE_ID, run_date, PERIOD)
+
+    started = await run_pipeline.start_run(NODE_ID, "second half")
+    check("a run opens", started["status"] == "open", str(started))
+    check(
+        "its period is stamped with the time, off the finalised key",
+        started["period"].startswith(f"{PERIOD}-") and started["period"] != PERIOD,
+        started["period"],
+    )
+    check(
+        "it runs the processors for the sun's current period",
+        "startrail" in started["processors"],
+        str(started["processors"]),
+    )
+
+    # Frames still arrive labelled with the sun's period. The run has to claim
+    # them, or it would sit empty while they reopened the finalised session.
+    for index in range(4):
+        run_pipeline.publish(
+            FrameEvent(
+                node_id=NODE_ID,
+                archive_date=run_date,
+                period=PERIOD,
+                captured_at=run_at + timedelta(minutes=10 + index),
+                rendered_path=make_frame(index, run_dir),
+            )
+        )
+
+    await run_pipeline._queue.join()
+
+    with SessionLocal() as db:
+        repository = ProcessingSessionRepository(db)
+        run_record = repository.get(started["session"])
+        solar_record = repository.get(f"{NODE_ID}/{run_date}/{PERIOD}")
+
+    check("the run collected the frames", run_record.frame_count == 4, str(run_record.frame_count))
+    check(
+        "the finalised session did not reopen",
+        solar_record.status == "closed" and solar_record.frame_count == 3,
+        f"{solar_record.status}, {solar_record.frame_count} frames",
+    )
+    check("the run is marked manual", run_record.session_kind == "manual", run_record.session_kind)
+    check("its label is kept", run_record.label == "second half", str(run_record.label))
+
+    # Under the run's own archive date: a run is stamped with the moment it was
+    # started, which is what "collect from now" means, not with the date of the
+    # frames that happen to arrive.
+    run_derived = settings.derived_dir / NODE_ID / started["archive_date"] / started["period"]
+    check("it writes into its own directory", run_derived.is_dir(), str(run_derived))
+    check(
+        "the finalised startrail is untouched",
+        (settings.derived_dir / NODE_ID / run_date / PERIOD / "startrail.jpg").is_file(),
+    )
+
+    # Starting a second run must not leave two sessions fighting over the frames.
+    second = await run_pipeline.start_run(NODE_ID)
+    check("a second run replaces the first", second.get("replaced") == started["session"], str(second))
+
+    with SessionLocal() as db:
+        first_after = ProcessingSessionRepository(db).get(started["session"])
+
+    check("the first run was finalised, not abandoned", first_after.status == "closed", first_after.status)
+
+    # A restart must not silently end a run: the operator started it, only the
+    # operator ends it.
+    await run_pipeline.stop()
+
+    restarted = ProcessingPipeline()
+    await restarted.start(broadcast=broadcast)
+
+    restarted.publish(
+        FrameEvent(
+            node_id=NODE_ID,
+            archive_date=run_date,
+            period=PERIOD,
+            captured_at=run_at + timedelta(minutes=20),
+            rendered_path=make_frame(1, run_dir),
+        )
+    )
+    await restarted._queue.join()
+
+    with SessionLocal() as db:
+        repository = ProcessingSessionRepository(db)
+        resumed = repository.get(second["session"])
+        untouched = repository.get(f"{NODE_ID}/{run_date}/{PERIOD}")
+
+    check("a run survives a restart", resumed.frame_count == 1, str(resumed.frame_count))
+    check(
+        "and the sun's session did not take the frame",
+        untouched.frame_count == 3,
+        str(untouched.frame_count),
+    )
+
+    finished = await restarted.close_session(NODE_ID, second["archive_date"], second["period"])
+    check(
+        "a run rehydrated after a restart still finalises its processors",
+        finished["status"] == "closed" and finished["products"],
+        str(finished),
+    )
+
+    run_pipeline = restarted
+
+    # With no run open, frames go back to the sun's session.
+    run_pipeline.publish(
+        FrameEvent(
+            node_id=NODE_ID,
+            archive_date=run_date,
+            period=PERIOD,
+            captured_at=run_at + timedelta(minutes=30),
+            rendered_path=make_frame(0, run_dir),
+        )
+    )
+    await run_pipeline._queue.join()
+
+    with SessionLocal() as db:
+        back_to_solar = ProcessingSessionRepository(db).get(f"{NODE_ID}/{run_date}/{PERIOD}")
+
+    check(
+        "closing the run hands the frames back to the sun's session",
+        back_to_solar.frame_count == 4,
+        str(back_to_solar.frame_count),
+    )
+
+    await run_pipeline.stop()
+
     print("\nmanual sessions")
     manual_pipeline = ProcessingPipeline()
     await manual_pipeline.start(broadcast=broadcast)

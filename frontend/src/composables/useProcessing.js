@@ -232,6 +232,19 @@ export function useProcessing() {
     return result;
   }
 
+  /** Collect into a fresh session from now, whatever the sun is doing. */
+  async function startRun(label) {
+    const result = await requestJson("/api/processing/runs/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ node_id: selectedNodeId.value, label: label || null })
+    });
+
+    await refresh();
+
+    return result;
+  }
+
   /** Live progress for one session, from the WebSocket or the last API load. */
   function progressFor(session) {
     return progress.value[`${session.archive_date}/${session.period}`] || session.progress || {};
@@ -254,6 +267,7 @@ export function useProcessing() {
     loadStatus,
     refresh,
     selectDate,
+    startRun,
     updateProcessor
   };
 }

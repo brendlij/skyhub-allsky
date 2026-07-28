@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted } from "vue";
+import { onMounted, ref } from "vue";
 import EmptyState from "../components/ui/EmptyState.vue";
 import { formatBytes } from "../api/skyhub";
 import {
@@ -22,7 +22,8 @@ const {
   sessions,
   closeSession,
   refresh,
-  selectDate
+  selectDate,
+  startRun
 } = useProcessing();
 
 const STAGE_LABELS = {
@@ -58,6 +59,26 @@ function formatDuration(seconds) {
   const whole = Math.round(seconds);
 
   return whole < 60 ? `${whole}s` : `${Math.floor(whole / 60)}m ${String(whole % 60).padStart(2, "0")}s`;
+}
+
+const starting = ref(false);
+
+async function startRunNow() {
+  starting.value = true;
+
+  try {
+    const result = await startRun();
+
+    notify(
+      result.replaced
+        ? `Finalised the previous run and started ${result.period}`
+        : `Collecting into ${result.period} — finalise it when you want the videos`
+    );
+  } catch (error) {
+    notifyError(error);
+  } finally {
+    starting.value = false;
+  }
 }
 
 async function finaliseNow(session) {
@@ -126,10 +147,14 @@ async function finaliseNow(session) {
       </div>
     </section>
 
-    <!-- Sessions still open, with a manual finalise. -->
-    <section v-if="openSessions().length" class="panel">
+    <!-- Sessions still open, with a manual finalise — and the way back in once
+         they have all been finalised. -->
+    <section v-if="selectedNodeId" class="panel">
       <div class="panel-header">
-        <h2>Open sessions</h2>
+        <h2>{{ openSessions().length ? "Open sessions" : "Collecting" }}</h2>
+        <button type="button" class="sm" :disabled="starting" @click="startRunNow">
+          {{ starting ? "Starting…" : "Start a new run" }}
+        </button>
       </div>
       <div class="panel-body">
         <ul class="session-rows">
@@ -157,9 +182,17 @@ async function finaliseNow(session) {
             <button type="button" class="sm" @click="finaliseNow(session)">Finalise now</button>
           </li>
         </ul>
+        <p v-if="!openSessions().length" class="field-hint">
+          Nothing is being collected for this node right now. The next capture starts a
+          session on its own — or start one here to begin a fresh set of products from
+          this moment.
+        </p>
         <p class="field-hint">
           A session closes on its own when the sun crosses. Finalise early to encode the
           videos now — useful after changing a setting, rather than waiting a night to see it.
+          <strong>Start a new run</strong> then collects into a separate session from this
+          moment, whatever the time of day, so the products you just finalised stay as they
+          are and the next ones stand beside them.
         </p>
       </div>
     </section>
