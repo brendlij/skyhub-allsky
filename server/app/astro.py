@@ -72,6 +72,11 @@ class Site:
 _cached: Site | None = None
 _lock = Lock()
 
+# Bumped on every invalidation. A read that began before the site was saved
+# carries the generation it started under, and is refused if it no longer
+# matches - see `site` for why that matters.
+_generation = 0
+
 
 def site() -> Site:
     """The configured site, read once and held.
@@ -80,12 +85,24 @@ def site() -> Site:
     again per frame from another thread, so it is cached rather than fetched.
     `invalidate` is called when the setting is saved, which is the only thing
     that can change it.
+
+    The generation counter closes a lost-update race that is easy to hit and
+    very hard to see. A capture thread calls this, misses the cache, and starts
+    reading the row; while it is reading, the operator saves a new location and
+    `invalidate` clears the cache. If the reader then simply stored what it
+    found, it would put the *old* location back into an already-invalidated
+    cache - and because nothing invalidates again until the next save, every sun
+    calculation in the process would keep using the old location until a
+    restart. Refusing to install a value read under a superseded generation
+    makes the stale reader drop its result instead.
     """
     global _cached
 
     with _lock:
         if _cached is not None:
             return _cached
+
+        read_at = _generation
 
     # Imported here rather than at module scope: the repository pulls in the
     # database, and this module is imported by processors that must stay
@@ -104,17 +121,22 @@ def site() -> Site:
         )
 
     with _lock:
-        _cached = resolved
+        if read_at == _generation:
+            _cached = resolved
 
+    # Returned either way: it is what the database held when this call started,
+    # which is the best answer this call can honestly give. Only the cache is
+    # protected, because only the cache outlives the call.
     return resolved
 
 
 def invalidate() -> None:
     """Forget the cached site. Called when it is saved."""
-    global _cached
+    global _cached, _generation
 
     with _lock:
         _cached = None
+        _generation += 1
 
 
 def observer() -> Observer:
@@ -148,6 +170,21 @@ def sun_elevation(moment: datetime) -> float | None:
         return None
 
 
+def current_night(moment: datetime | None = None) -> date:
+    """The date of the night in progress, which is not always today's date.
+
+    Nights are named for the date they began, so at 01:00 the night in progress
+    began yesterday. Taking `date.today()` instead would describe the night that
+    has not started yet - so a settings page opened at 01:00, standing in the
+    dark, would report tomorrow's dusk and dawn, and a startrail asked about
+    "tonight" would answer about the wrong session. Local midday is the split,
+    the same convention `dark_window` and the archive use.
+    """
+    local = (moment or datetime.now(local_zone())).astimezone(local_zone())
+
+    return local.date() if local.hour >= 12 else local.date() - timedelta(days=1)
+
+
 def is_dark(moment: datetime, depression: float = ASTRONOMICAL) -> bool:
     """Whether the sun is at least `depression` degrees below the horizon.
 
@@ -160,6 +197,39 @@ def is_dark(moment: datetime, depression: float = ASTRONOMICAL) -> bool:
     elevation = sun_elevation(moment)
 
     return elevation is not None and elevation <= -abs(depression)
+
+
+def sky_position(moment: datetime) -> dict[str, float]:
+    """Where the sun and moon are, for stamping onto a capture.
+
+    A camera node knows its exposure and its sensor temperature; it does not know
+    where on Earth it is standing. The server does, so it is the server that can
+    answer this - and the pipeline's ambient collector has been looking for
+    `sun_altitude` on every frame since it was written, finding nothing, because
+    nothing was putting it there.
+
+    Silent about anything astral will not answer, so a value that cannot be
+    computed is absent from the metadata rather than present and wrong.
+    """
+    from astral import moon as astral_moon
+
+    where = observer()
+    values: dict[str, float] = {}
+
+    try:
+        values["sun_altitude"] = round(astral_sun.elevation(where, moment), 2)
+        values["sun_azimuth"] = round(astral_sun.azimuth(where, moment), 2)
+
+    except Exception:
+        pass
+
+    try:
+        values["moon_altitude"] = round(astral_moon.elevation(where, moment), 2)
+
+    except Exception:
+        pass
+
+    return values
 
 
 def dark_window(
@@ -181,6 +251,15 @@ def dark_window(
     night dusk falls after midnight - so two dusks share one date, none falls on
     another, and the answer for a given night can be the wrong night's event by a
     whole day. Elevation has no such ambiguity.
+
+    One deliberate difference from `astral.sun.dusk`: astral applies a horizon
+    dip correction for the observer's height, so at 240 m its "18 degrees" dusk
+    is really the sun at 18.5 degrees down and lands six minutes late. That
+    correction belongs to sunrise and sunset, where standing higher genuinely
+    lets you see further over the horizon; astronomical twilight is a statement
+    about how much light is left in the sky, and 18 degrees means 18 degrees at
+    any altitude. Scanning elevation gives the undipped definition, which is
+    also what Clear Outside and timeanddate report.
     """
     threshold = -abs(depression)
     zone = local_zone()

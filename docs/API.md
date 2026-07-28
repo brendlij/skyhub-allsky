@@ -155,8 +155,8 @@ per-key permissions. That is proportionate for a LAN tool, but it means:
 - `PUT` endpoints are partial updates: send only the fields you want to change.
   `null` fields are ignored rather than clearing a value.
 - `node_id` is the id the node was started with (`--node-id`), e.g. `pi5-hqcam`.
-- `period` is `day` or `night`, decided from sunrise/sunset at the server's
-  configured latitude and longitude.
+- `period` is `day` or `night`, decided from sunrise/sunset at the location set
+  in Settings (`GET`/`PUT /api/settings/site`).
 
 ---
 
@@ -546,6 +546,52 @@ Bytes used by captures, originals, thumbnails and the database, plus free disk.
 
 Retention: `day_capture_enabled`, `night_capture_enabled`, `retention_days`,
 `max_storage_gb`.
+
+---
+
+## Site
+
+### `GET` / `PUT /api/settings/site`
+
+Where the camera is, and what that means for tonight. This is the single source
+of every sun calculation in the server — the elevation stamped on each capture,
+the sunrise and sunset that split the archive into day and night, and the
+astronomical dusk-to-dawn window the startrail stacks in. Saving takes effect on
+the next capture; nothing needs restarting.
+
+`site` takes `label`, `latitude`, `longitude`, `elevation_m` and `timezone`.
+`sun` is read-only and describes the night in progress — not today's calendar
+date, so at 01:00 it still describes the dark you are standing in.
+
+```json
+{
+  "site": {
+    "label": "home",
+    "latitude": 47.65514,
+    "longitude": 7.80044,
+    "elevation_m": 240.0,
+    "timezone": "Europe/Berlin",
+    "updated_at": "2026-07-28T21:12:03+00:00"
+  },
+  "sun": {
+    "date": "2026-07-28",
+    "timezone": "Europe/Berlin",
+    "sunset": "2026-07-28T21:11:25+02:00",
+    "dark_from": "2026-07-28T23:32:08+02:00",
+    "dark_until": "2026-07-29T03:38:58+02:00",
+    "dark_hours": 4.11,
+    "sunrise": "2026-07-29T05:59:41+02:00"
+  }
+}
+```
+
+`dark_from` and `dark_until` are null, and `dark_hours` is 0, on a night when the
+sun never reaches 18° below the horizon — north of roughly 48.5° that is several
+weeks around midsummer.
+
+`SKYHUB_SERVER_LATITUDE`, `SKYHUB_SERVER_LONGITUDE` and `SKYHUB_SERVER_TIMEZONE`
+only seed this the first time the row is created. After that they are ignored;
+this endpoint is the location.
 
 ---
 

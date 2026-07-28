@@ -27,8 +27,26 @@ const dirty = computed(
 /* Tonight, in one line. Coordinates are four decimal places of abstraction —
  * what an operator actually wants to know is whether there will be any
  * astronomical dark to stack a startrail in. */
-const clockFormat = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
-const asClock = (value) => (value ? clockFormat.format(new Date(value)) : "—");
+/* Rendered in the site's timezone, not the browser's. Checking the camera from
+ * a laptop in another country should not silently restate its dusk in local
+ * time — these are times at the camera. */
+const asClock = (value) => {
+  if (!value) return "—";
+
+  const zone = sunTimes.value?.timezone || siteSettings.value?.timezone;
+
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: zone || undefined
+    }).format(new Date(value));
+  } catch {
+    // An unknown zone must not blank the whole panel.
+    return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" })
+      .format(new Date(value));
+  }
+};
 
 const darkSummary = computed(() => {
   const sun = sunTimes.value;

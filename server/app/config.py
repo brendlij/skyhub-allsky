@@ -13,6 +13,11 @@ class ServerSettings(BaseSettings):
     app_version: str = "0.1.0"
     data_dir: Path = REPO_ROOT / "data"
     database_filename: str = "skyhub.db"
+    # Seed values only, read exactly once: they fill in the site_settings row the
+    # first time it is created, and nothing consults them afterwards. The live
+    # location is the row, edited in Settings and served by `app.astro`, which is
+    # the only thing any sun calculation may ask. Changing these on an install
+    # that already has a row does nothing - change the location in the UI.
     latitude: float = 52.52
     longitude: float = 13.405
     timezone: str = "Europe/Berlin"

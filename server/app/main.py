@@ -1,6 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import json
 import re
 import shutil
@@ -772,8 +772,12 @@ def sun_times_to_dict(on_date: date | None = None) -> dict:
     an operator whether the startrail will have anything to stack. Sunset and
     astronomical dusk do, so the answer is computed where the location is set
     rather than left to be discovered a night later.
+
+    "Tonight" is the night in progress, not today's calendar date - opened at
+    01:00 this describes the dark the operator is standing in, not the dark
+    twenty-three hours away.
     """
-    night = on_date or datetime.now(astro.local_zone()).date()
+    night = on_date or astro.current_night()
     window = astro.dark_window(night)
 
     times = {
@@ -785,9 +789,14 @@ def sun_times_to_dict(on_date: date | None = None) -> dict:
     }
 
     try:
-        today_sun = sun(astro.observer(), date=night, tzinfo=astro.local_zone())
-        times["sunset"] = today_sun["sunset"].isoformat()
-        times["sunrise"] = today_sun["sunrise"].isoformat()
+        zone = astro.local_zone()
+        # The two ends of this night: the sunset that opens it, and the sunrise
+        # of the following morning that closes it. Both from `night`'s own date
+        # would pair an evening with the sunrise fourteen hours before it.
+        times["sunset"] = sun(astro.observer(), date=night, tzinfo=zone)["sunset"].isoformat()
+        times["sunrise"] = sun(
+            astro.observer(), date=night + timedelta(days=1), tzinfo=zone
+        )["sunrise"].isoformat()
 
     except Exception:
         # Polar day or night. The dark window above is the answer that matters
@@ -2222,6 +2231,15 @@ async def upload_capture(
     original_name = safe_path_part(Path(file.filename or f"capture.{upload_format}").name)
     capture_id = f"cap_{uuid4().hex}"
     captured_at = parse_capture_datetime(parsed_metadata)
+
+    # Stamped by the server because only the server knows where the camera is.
+    # This is what carries the sun's position onto the capture record, into the
+    # frame the processors receive, and through to the ambient block on every
+    # derived product. `setdefault` so a node that does report its own position
+    # is not overwritten by ours.
+    for key, value in astro.sky_position(captured_at).items():
+        parsed_metadata.setdefault(key, value)
+
     archive_date, period = archive_period(captured_at)
     storage_settings = CaptureStorageSettingsRepository(db).get_or_create()
 
