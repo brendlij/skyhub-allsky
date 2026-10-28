@@ -15,6 +15,10 @@ capture pauses on its own disk guard, never that the last copy of a night is los
               day a processing session is still open on are never touched.
 
 Derived products are copied but never deleted: database rows point at them.
+
+The configuration lives in the `archive_settings` row and is edited in the UI. The
+archive path is only ever a copy destination: nothing in here deletes anything under
+it, so a wrong path costs a pointless copy, never data.
 """
 
 from __future__ import annotations
@@ -35,6 +39,7 @@ from app import astro
 from app.config import get_settings
 from app.db.database import SessionLocal
 from app.models.archived_file import ArchivedFile
+from app.repositories.archive_settings_repository import ArchiveSettingsRepository
 from app.repositories.processing_repository import ProcessingSessionRepository
 
 logger = structlog.get_logger()
@@ -48,8 +53,10 @@ CYCLE_BUDGET_SECONDS = 600
 COMMIT_EVERY = 100
 # A dead share fails every file the same way; stop rather than log thousands of lines.
 MAX_CONSECUTIVE_FAILURES = 5
+ALL_SOURCES = ("originals", "captures", "derived")
 DELETABLE_SOURCES = ("captures", "originals")
 DATE_DIR = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+WRITE_TEST_NAME = ".skyhub-write-test"
 
 _cycle_lock = threading.Lock()
 _state: dict = {"running": False, "last_run_at": None, "last_result": None, "last_error": None}
@@ -57,6 +64,59 @@ _state: dict = {"running": False, "last_run_at": None, "last_result": None, "las
 
 class ArchiveError(Exception):
     """A copy that did not verify. The partial file is already gone when this is raised."""
+
+
+@dataclass(frozen=True)
+class ArchiveConfig:
+    enabled: bool
+    archive_dir: Path | None
+    interval_minutes: int
+    sources: tuple[str, ...]
+    free_trigger_gb: float
+    free_target_gb: float
+    delete_after_days: int
+    require_mount: bool
+
+    @property
+    def active(self) -> bool:
+        return self.enabled and self.archive_dir is not None
+
+    def as_dict(self) -> dict:
+        return {
+            "enabled": self.enabled,
+            "archive_dir": str(self.archive_dir) if self.archive_dir else "",
+            "interval_minutes": self.interval_minutes,
+            "sources": list(self.sources),
+            "free_trigger_gb": self.free_trigger_gb,
+            "free_target_gb": self.free_target_gb,
+            "delete_after_days": self.delete_after_days,
+            "require_mount": self.require_mount,
+        }
+
+
+def parse_sources(value: str | list[str] | tuple[str, ...]) -> tuple[str, ...]:
+    names = value.split(",") if isinstance(value, str) else list(value)
+    cleaned = [name.strip() for name in names]
+
+    return tuple(name for name in ALL_SOURCES if name in cleaned)
+
+
+def config_from_row(row) -> ArchiveConfig:
+    return ArchiveConfig(
+        enabled=bool(row.enabled),
+        archive_dir=Path(row.archive_dir) if row.archive_dir else None,
+        interval_minutes=max(1, int(row.interval_minutes)),
+        sources=parse_sources(row.sources),
+        free_trigger_gb=float(row.free_trigger_gb),
+        free_target_gb=float(row.free_target_gb),
+        delete_after_days=max(0, int(row.delete_after_days)),
+        require_mount=bool(row.require_mount),
+    )
+
+
+def load_config() -> ArchiveConfig:
+    with SessionLocal() as db:
+        return config_from_row(ArchiveSettingsRepository(db).get_or_create())
 
 
 @dataclass
@@ -85,44 +145,131 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def configured_sources() -> list[str]:
-    allowed = {"originals", "captures", "derived"}
-    wanted = [name.strip() for name in get_settings().archive_sources.split(",")]
-
-    return [name for name in wanted if name in allowed]
-
-
 def free_gb(path: Path) -> float:
     return shutil.disk_usage(path).free / 1024**3
 
 
-def archive_problem() -> str | None:
-    """Why the archive cannot be used right now, or None when it can."""
-    settings = get_settings()
-    archive_dir = settings.archive_dir
+def directory_problem(path: Path | None, require_mount: bool) -> str | None:
+    """Why this directory cannot be used as the archive, or None when it can."""
+    data_dir = get_settings().data_dir
 
-    if archive_dir is None:
-        return "archive_dir is not set"
+    if path is None:
+        return "No destination folder is set."
 
-    if not archive_dir.is_dir():
-        return f"{archive_dir} does not exist - is the share mounted?"
+    if not path.is_absolute():
+        return f"{path} is not an absolute path."
 
-    if not os.access(archive_dir, os.W_OK):
-        return f"{archive_dir} is not writable"
+    if not path.is_dir():
+        return f"{path} does not exist. Is the share mounted?"
 
-    if settings.archive_require_mount:
+    if not os.access(path, os.W_OK):
+        return f"{path} is not writable."
+
+    if require_mount:
         try:
-            same_disk = archive_dir.stat().st_dev == settings.data_dir.stat().st_dev
+            same_disk = path.stat().st_dev == data_dir.stat().st_dev
         except OSError as error:
-            return f"cannot stat the archive: {error}"
+            return f"Cannot read {path}: {error}"
 
         if same_disk:
             return (
-                f"{archive_dir} is on the same filesystem as the data directory - "
-                "refusing to use it (mount the share, or set SKYHUB_SERVER_ARCHIVE_REQUIRE_MOUNT=false)"
+                f"{path} is on the same disk as the data folder. A share that is not "
+                "mounted looks exactly like this, so it is refused. Mount the share, or "
+                "untick the mount check if this really is a separate location."
             )
 
     return None
+
+
+def archive_problem(config: ArchiveConfig) -> str | None:
+    if config.archive_dir is None:
+        return "No destination folder is set."
+
+    return directory_problem(config.archive_dir, config.require_mount)
+
+
+def test_destination(path_text: str, require_mount: bool) -> dict:
+    """Check a candidate destination the way the archiver will use it.
+
+    Writes and reads back a small file, because "the folder exists" is also true of
+    a share that has gone read-only or full.
+    """
+    checks: list[dict] = []
+    path = Path(path_text.strip()) if path_text and path_text.strip() else None
+    problem = directory_problem(path, require_mount)
+
+    checks.append({"label": "Folder is usable", "ok": problem is None, "detail": problem or str(path)})
+
+    if problem is None and path is not None:
+        probe = path / WRITE_TEST_NAME
+        token = hashlib.sha256(str(time.time()).encode()).hexdigest()
+
+        try:
+            probe.write_text(token)
+            readable = probe.read_text() == token
+            checks.append(
+                {
+                    "label": "Can write and read back",
+                    "ok": readable,
+                    "detail": "OK" if readable else "The file read back differently",
+                }
+            )
+        except OSError as error:
+            checks.append({"label": "Can write and read back", "ok": False, "detail": str(error)})
+        finally:
+            probe.unlink(missing_ok=True)
+
+        try:
+            checks.append(
+                {
+                    "label": "Free space",
+                    "ok": free_gb(path) > 1,
+                    "detail": f"{free_gb(path):.1f} GB free",
+                }
+            )
+        except OSError as error:
+            checks.append({"label": "Free space", "ok": False, "detail": str(error)})
+
+    return {"ok": all(check["ok"] for check in checks), "checks": checks}
+
+
+SYSTEM_MOUNT_PREFIXES = ("/proc", "/sys", "/dev", "/run", "/boot", "/snap", "/var/lib")
+USABLE_FILESYSTEMS = {
+    "cifs", "smb3", "nfs", "nfs4", "ext4", "exfat", "vfat", "ntfs", "ntfs3", "fuseblk", "btrfs", "xfs",
+}
+
+
+def mount_candidates() -> list[dict]:
+    """Mounted filesystems that could plausibly be an archive: shares and extra drives."""
+    mounts_file = Path("/proc/mounts")
+
+    if not mounts_file.is_file():
+        return []
+
+    found: list[dict] = []
+
+    for line in mounts_file.read_text(errors="replace").splitlines():
+        parts = line.split()
+
+        if len(parts) < 3:
+            continue
+
+        source, mount_point, fstype = parts[0], parts[1].replace("\\040", " "), parts[2]
+
+        if fstype not in USABLE_FILESYSTEMS or mount_point == "/":
+            continue
+
+        if mount_point.startswith(SYSTEM_MOUNT_PREFIXES):
+            continue
+
+        try:
+            free = round(free_gb(Path(mount_point)), 1)
+        except OSError:
+            continue
+
+        found.append({"path": mount_point, "type": fstype, "source": source, "free_gb": free})
+
+    return found
 
 
 def sha256_of(path: Path) -> str:
@@ -190,15 +337,14 @@ def walk_oldest_first(root: Path):
 # ---------- copy ----------
 
 
-def copy_phase(result: CycleResult, deadline: float) -> None:
-    settings = get_settings()
-    archive_dir = settings.archive_dir
+def copy_phase(config: ArchiveConfig, result: CycleResult, deadline: float) -> None:
+    data_dir = get_settings().data_dir
     settle_before = time.time() - SETTLE_SECONDS
     consecutive_failures = 0
 
     with SessionLocal() as db:
-        for source_name in configured_sources():
-            root = settings.data_dir / source_name
+        for source_name in config.sources:
+            root = data_dir / source_name
 
             if not root.is_dir():
                 continue
@@ -234,7 +380,7 @@ def copy_phase(result: CycleResult, deadline: float) -> None:
                         if known.get(rel) == stat.st_size:
                             continue
 
-                        size, digest = copy_verified(path, archive_dir / rel)
+                        size, digest = copy_verified(path, config.archive_dir / rel)
 
                     except (OSError, ArchiveError) as error:
                         result.failed_files += 1
@@ -276,10 +422,8 @@ def protected_dates() -> set[tuple[str, str]]:
         }
 
 
-def verified_on_archive(db, path: Path) -> int | None:
+def verified_on_archive(config: ArchiveConfig, db, path: Path) -> int | None:
     """Size of the local file when a verified archive copy of it exists, else None."""
-    settings = get_settings()
-
     try:
         local_size = path.stat().st_size
         rel = relative(path)
@@ -288,7 +432,7 @@ def verified_on_archive(db, path: Path) -> int | None:
         if row is None or row.size_bytes != local_size:
             return None
 
-        if (settings.archive_dir / rel).stat().st_size != local_size:
+        if (config.archive_dir / rel).stat().st_size != local_size:
             return None
 
     except OSError:
@@ -297,21 +441,21 @@ def verified_on_archive(db, path: Path) -> int | None:
     return local_size
 
 
-def delete_phase(result: CycleResult) -> None:
-    settings = get_settings()
-    trigger = settings.archive_free_trigger_gb
-    target = settings.archive_free_target_gb
-    freeing = free_gb(settings.data_dir) < trigger
+def delete_phase(config: ArchiveConfig, result: CycleResult) -> None:
+    data_dir = get_settings().data_dir
+    freeing = free_gb(data_dir) < config.free_trigger_gb
     cutoff = None
 
-    if settings.archive_delete_after_days > 0:
-        cutoff = (utc_now() - timedelta(days=settings.archive_delete_after_days)).date().isoformat()
+    if config.delete_after_days > 0:
+        cutoff = (utc_now() - timedelta(days=config.delete_after_days)).date().isoformat()
 
     if not freeing and cutoff is None:
         return
 
     if freeing:
-        result.notes.append(f"free space below {trigger:g} GB, freeing to {target:g} GB")
+        result.notes.append(
+            f"free space below {config.free_trigger_gb:g} GB, freeing to {config.free_target_gb:g} GB"
+        )
 
     today = astro.archive_period(utc_now())[0]
     busy = protected_dates()
@@ -319,30 +463,32 @@ def delete_phase(result: CycleResult) -> None:
     with SessionLocal() as db:
         # Oldest first, so the first day that is neither too old nor needed for space
         # means every later day is not either.
-        for date_name, directory, node_id in oldest_day_directories():
+        for date_name, directory, node_id in oldest_day_directories(config):
             if date_name >= today or (node_id, date_name) in busy:
                 continue
 
             too_old = cutoff is not None and date_name < cutoff
 
-            if freeing and free_gb(settings.data_dir) >= target:
+            if freeing and free_gb(data_dir) >= config.free_target_gb:
                 freeing = False
 
             if not too_old and not freeing:
                 break
 
-            delete_directory(db, directory, result, stop_at_target=not too_old)
+            delete_directory(config, db, directory, result, stop_at_target=not too_old)
             prune_empty(directory)
 
 
-def delete_directory(db, directory: Path, result: CycleResult, stop_at_target: bool) -> None:
+def delete_directory(
+    config: ArchiveConfig, db, directory: Path, result: CycleResult, stop_at_target: bool
+) -> None:
     """Remove every verified file under a day directory, optionally stopping once there is room."""
-    settings = get_settings()
+    data_dir = get_settings().data_dir
 
     for current, _directories, files in os.walk(directory):
         for name in sorted(files):
             path = Path(current) / name
-            size = verified_on_archive(db, path)
+            size = verified_on_archive(config, db, path)
 
             if size is None:
                 continue
@@ -359,21 +505,21 @@ def delete_directory(db, directory: Path, result: CycleResult, stop_at_target: b
             if (
                 stop_at_target
                 and result.deleted_files % 50 == 0
-                and free_gb(settings.data_dir) >= settings.archive_free_target_gb
+                and free_gb(data_dir) >= config.free_target_gb
             ):
                 return
 
 
-def oldest_day_directories() -> list[tuple[str, Path, str]]:
+def oldest_day_directories(config: ArchiveConfig) -> list[tuple[str, Path, str]]:
     """Every (date, directory, node_id) under captures/ and originals/, oldest date first."""
-    settings = get_settings()
+    data_dir = get_settings().data_dir
     found: list[tuple[str, Path, str]] = []
 
     for source_name in DELETABLE_SOURCES:
-        if source_name not in configured_sources():
+        if source_name not in config.sources:
             continue
 
-        root = settings.data_dir / source_name
+        root = data_dir / source_name
 
         if not root.is_dir():
             continue
@@ -402,8 +548,11 @@ def prune_empty(directory: Path) -> None:
 # ---------- cycle ----------
 
 
-def run_cycle() -> dict:
-    """One copy pass and one cleanup pass. Safe to call from anywhere, one at a time."""
+def run_cycle(force: bool = False) -> dict:
+    """One copy pass and one cleanup pass. Safe to call from anywhere, one at a time.
+
+    `force` runs even when the archive is switched off, for a manual "run now".
+    """
     if not _cycle_lock.acquire(blocking=False):
         return {"skipped": "a cycle is already running"}
 
@@ -411,7 +560,12 @@ def run_cycle() -> dict:
     result = CycleResult()
 
     try:
-        problem = archive_problem()
+        config = load_config()
+
+        if not config.enabled and not force:
+            return {"skipped": "the archive is switched off"}
+
+        problem = archive_problem(config)
 
         if problem:
             _state["last_error"] = problem
@@ -419,8 +573,8 @@ def run_cycle() -> dict:
             return {"skipped": problem}
 
         _state["last_error"] = None
-        copy_phase(result, deadline=time.monotonic() + CYCLE_BUDGET_SECONDS)
-        delete_phase(result)
+        copy_phase(config, result, deadline=time.monotonic() + CYCLE_BUDGET_SECONDS)
+        delete_phase(config, result)
 
         if result.copied_files or result.deleted_files or result.failed_files:
             logger.info("archive.cycle", **result.as_dict())
@@ -441,30 +595,41 @@ def run_cycle() -> dict:
         _cycle_lock.release()
 
 
+def due(config: ArchiveConfig) -> bool:
+    """Whether the background loop should start a pass now."""
+    if not config.active:
+        return False
+
+    last = _state["last_run_at"]
+
+    if last is None:
+        return True
+
+    elapsed = (utc_now() - datetime.fromisoformat(last)).total_seconds()
+
+    return elapsed >= config.interval_minutes * 60
+
+
 def status() -> dict:
-    settings = get_settings()
-    problem = archive_problem()
+    config = load_config()
+    problem = archive_problem(config) if config.archive_dir else None
 
     with SessionLocal() as db:
         archived_count = db.query(ArchivedFile).count()
 
     payload = {
-        "configured": settings.archive_dir is not None,
-        "archive_dir": str(settings.archive_dir) if settings.archive_dir else None,
-        "ready": problem is None,
+        "configured": config.archive_dir is not None,
+        "enabled": config.enabled,
+        "ready": config.active and problem is None,
         "problem": problem,
-        "sources": configured_sources(),
-        "free_gb_local": round(free_gb(settings.data_dir), 2),
-        "free_trigger_gb": settings.archive_free_trigger_gb,
-        "free_target_gb": settings.archive_free_target_gb,
-        "delete_after_days": settings.archive_delete_after_days,
+        "free_gb_local": round(free_gb(get_settings().data_dir), 2),
         "archived_files": archived_count,
         **_state,
     }
 
-    if problem is None:
+    if config.archive_dir is not None and problem is None:
         try:
-            payload["free_gb_archive"] = round(free_gb(settings.archive_dir), 2)
+            payload["free_gb_archive"] = round(free_gb(config.archive_dir), 2)
         except OSError:
             payload["free_gb_archive"] = None
 

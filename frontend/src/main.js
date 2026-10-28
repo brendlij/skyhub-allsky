@@ -6,5 +6,6 @@ import "./styles/base.css";
 import "./styles/ui.css";
 import "./styles/layout.css";
 import "./styles/views.css";
+import "./styles/settings.css";
 
 createApp(App).use(router).mount("#app");

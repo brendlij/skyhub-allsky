@@ -26,8 +26,17 @@ from app import archive, astro  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from app.db.database import SessionLocal, create_db_tables  # noqa: E402
 from app.models.archived_file import ArchivedFile  # noqa: E402
+from app.repositories.archive_settings_repository import ArchiveSettingsRepository  # noqa: E402
 
 settings = get_settings()
+
+
+def set_config(**values) -> None:
+    """Edit the archive settings the way the UI does: through the saved row."""
+    with SessionLocal() as db:
+        ArchiveSettingsRepository(db).update(values)
+
+
 failures: list[str] = []
 
 
@@ -98,8 +107,7 @@ check("and leaves nothing behind", not (_ARCHIVE / "captures/cam/bad.jpg").exist
 check("no .part either", not list(_ARCHIVE.rglob("*.part")))
 
 print("deleting from verified copies")
-settings.archive_free_trigger_gb = 1e9
-settings.archive_free_target_gb = 2e9
+set_config(free_trigger_gb=1e9, free_target_gb=2e9)
 result = archive.run_cycle()
 check("old verified files are deleted", not old_original.exists() and not old_capture.exists(), str(result))
 check("today's frames are never deleted", today_capture.exists())
@@ -108,32 +116,47 @@ check("derived products are never deleted", old_derived.exists())
 check("the archive copy survives", (_ARCHIVE / f"originals/cam/{OLD}/night/a.jpg").exists())
 
 print("a missing or wrong archive copy blocks deletion")
-settings.archive_free_trigger_gb = 15.0
-settings.archive_free_target_gb = 25.0
+set_config(free_trigger_gb=15.0, free_target_gb=25.0)
 guarded = make_file(f"originals/cam/{OLD}/night/guarded.jpg", b"guarded" * 1000)
 archive.run_cycle()
 (_ARCHIVE / f"originals/cam/{OLD}/night/guarded.jpg").write_bytes(b"short")
-settings.archive_free_trigger_gb = 1e9
-settings.archive_free_target_gb = 2e9
+set_config(free_trigger_gb=1e9, free_target_gb=2e9)
 archive.run_cycle()
 check("a truncated archive copy keeps the local file", guarded.exists())
 
 print("archive unavailable")
-settings.archive_dir = _ARCHIVE / "not-mounted"
+set_config(archive_dir=str(_ARCHIVE / "not-mounted"))
 survivor = make_file(f"originals/cam/{OLD}/night/survivor.jpg", b"survivor" * 1000)
 result = archive.run_cycle()
 check("an absent archive skips the cycle", "skipped" in result, str(result))
 check("and deletes nothing", survivor.exists() and guarded.exists())
-settings.archive_dir = _ARCHIVE
+set_config(archive_dir=str(_ARCHIVE))
 
 print("mount check")
-settings.archive_require_mount = True
-check("an archive on the same filesystem is refused", archive.archive_problem() is not None)
-settings.archive_require_mount = False
+set_config(require_mount=True)
+check("an archive on the same filesystem is refused", archive.archive_problem(archive.load_config()) is not None)
+set_config(require_mount=False)
+
+print("switched off")
+set_config(enabled=False)
+check("a switched-off archive does not run", "skipped" in archive.run_cycle())
+check("but a manual run still can", "copied_files" in archive.run_cycle(force=True))
+set_config(enabled=True)
+
+print("destination test")
+good = archive.test_destination(str(_ARCHIVE), require_mount=False)
+check("a writable folder passes", good["ok"], str(good))
+check("the probe file is cleaned up", not (_ARCHIVE / archive.WRITE_TEST_NAME).exists())
+check("a missing folder fails", not archive.test_destination(str(_ARCHIVE / "nope"), require_mount=False)["ok"])
+check("a relative path fails", not archive.test_destination("relative/dir", require_mount=False)["ok"])
+check("an empty path fails", not archive.test_destination("", require_mount=False)["ok"])
+check("the same-disk check applies to the test", not archive.test_destination(str(_ARCHIVE), require_mount=True)["ok"])
+check("mount listing never raises", isinstance(archive.mount_candidates(), list))
 
 print("status")
 state = archive.status()
 check("status reports ready", state["ready"] is True and state["configured"] is True, str(state))
+check("the loop is due on a fresh start", archive.due(archive.load_config()) in (True, False))
 
 if failures:
     print(f"\n{len(failures)} check(s) failed:")

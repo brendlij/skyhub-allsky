@@ -31,26 +31,20 @@ because the database refers to those files. `thumbnails/` are small and stay.
 
 ### Enable it
 
-Mount the share first (below), then set in the service environment:
+Everything is configured in **Settings -> Storage -> Archive**: pick the destination
+folder (mounted shares and drives are listed), press *Test destination*, choose what to
+copy, set the free-space thresholds and switch it on. Saving refuses a destination that
+is missing, read-only or on the same disk as the data.
 
-```bash
-SKYHUB_SERVER_ARCHIVE_DIR=/mnt/nas/allsky
-```
+The settings live in the database. The `SKYHUB_SERVER_ARCHIVE_*` variables only seed
+them the first time the server starts; after that the UI is the source of truth.
 
-Optional:
+`archive_require_mount` ("Require a separate disk") exists because an unmounted share is
+just an empty folder on the SD card: copying into it would fill the card and look like a
+successful backup.
 
-| Variable | Default | |
-|---|---|---|
-| `SKYHUB_SERVER_ARCHIVE_INTERVAL_MINUTES` | 10 | how often a pass runs |
-| `SKYHUB_SERVER_ARCHIVE_SOURCES` | `originals,captures,derived` | what is copied |
-| `SKYHUB_SERVER_ARCHIVE_DELETE_AFTER_DAYS` | 0 | also remove verified local files older than N days (0 = only when space is low) |
-| `SKYHUB_SERVER_ARCHIVE_REQUIRE_MOUNT` | true | refuse an archive on the same filesystem as the data |
-
-`archive_require_mount` exists because an unmounted share is just an empty folder on
-the SD card: copying into it would fill the card and look like a successful backup.
-
-`GET /api/archive/status` shows state, free space on both sides and the last result.
-`POST /api/archive/run` starts a pass immediately.
+API, for scripts: `GET/PUT /api/archive/settings`, `POST /api/archive/test`,
+`GET /api/archive/mounts`, `GET /api/archive/status`, `POST /api/archive/run`.
 
 ### Mounting a NAS (SMB, e.g. UGREEN)
 

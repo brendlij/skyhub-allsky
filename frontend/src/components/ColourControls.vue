@@ -1,5 +1,6 @@
 <script setup>
 import { computed } from "vue";
+import SliderField from "./ui/SliderField.vue";
 
 const props = defineProps({
   settings: { type: Object, required: true },
@@ -56,9 +57,9 @@ const hue = computed({
 });
 
 const tintLabel = computed(() => {
-  if (tint.value > 2.05) return "magenta";
-  if (tint.value < 1.55) return "green";
-  return "neutral";
+  if (tint.value > 2.05) return "Magenta";
+  if (tint.value < 1.55) return "Green";
+  return "Neutral";
 });
 
 function resetNeutral() {
@@ -83,27 +84,51 @@ function resetNeutral() {
     </p>
 
     <fieldset class="colour-sliders" :disabled="autoWhiteBalance">
-      <div class="field">
-        <span class="field-label">
-          Tint <small class="faint">green ↔ magenta</small>
-          <em class="field-value">{{ tintLabel }}</em>
-        </span>
-        <div class="colour-swatch tint-track" aria-hidden="true" />
-        <input v-model.number="tint" type="range" min="0.6" max="3.5" step="0.01" />
-      </div>
+      <SliderField
+        v-model="tint"
+        label="Tint"
+        hint="green to magenta"
+        :display="tintLabel"
+        :min="0.6"
+        :max="3.5"
+        :step="0.01"
+        track="tint"
+      />
+      <SliderField
+        v-model="warmth"
+        label="Warmth"
+        hint="blue to amber"
+        :display="warmth.toFixed(2)"
+        :min="0.4"
+        :max="2.5"
+        :step="0.01"
+        track="warmth"
+      />
+    </fieldset>
 
-      <div class="field">
-        <span class="field-label">
-          Warmth <small class="faint">blue ↔ amber</small>
-          <em class="field-value">{{ warmth.toFixed(2) }}</em>
-        </span>
-        <div class="colour-swatch warmth-track" aria-hidden="true" />
-        <input v-model.number="warmth" type="range" min="0.4" max="2.5" step="0.01" />
-      </div>
+    <SliderField
+      v-model="saturation"
+      label="Saturation"
+      :display="saturation.toFixed(2)"
+      :min="0"
+      :max="2"
+      :step="0.05"
+    />
 
-      <div class="colour-gains">
+    <SliderField
+      v-model="hue"
+      label="Hue shift"
+      :display="`${hue.toFixed(0)}°`"
+      :min="-180"
+      :max="180"
+      :step="1"
+    />
+
+    <details class="advanced">
+      <summary>Raw channel gains</summary>
+      <fieldset class="colour-gains" :disabled="autoWhiteBalance">
         <label class="field">
-          <span>Red gain</span>
+          <span>Red</span>
           <input
             :value="red"
             type="number"
@@ -114,7 +139,7 @@ function resetNeutral() {
           />
         </label>
         <label class="field">
-          <span>Blue gain</span>
+          <span>Blue</span>
           <input
             :value="blue"
             type="number"
@@ -124,29 +149,13 @@ function resetNeutral() {
             @input="setGains(red, Number($event.target.value))"
           />
         </label>
-      </div>
-    </fieldset>
-
-    <div class="field">
-      <span class="field-label">
-        Saturation
-        <em class="field-value">{{ saturation.toFixed(2) }}</em>
-      </span>
-      <input v-model.number="saturation" type="range" min="0" max="2" step="0.05" />
-    </div>
-
-    <div class="field">
-      <span class="field-label">
-        Hue shift
-        <em class="field-value">{{ hue.toFixed(0) }}°</em>
-      </span>
-      <input v-model.number="hue" type="range" min="-180" max="180" step="1" />
-    </div>
+      </fieldset>
+    </details>
 
     <p class="field-hint">
       Tint, warmth and saturation are applied by the camera. Hue is applied when the
-      capture is rendered, so it leaves the stored original untouched — prefer tint
-      for fixing a colour cast.
+      capture is rendered, so it leaves the stored original untouched. Prefer tint for
+      fixing a colour cast.
     </p>
 
     <button type="button" class="sm" @click="resetNeutral">Reset colour</button>

@@ -1,5 +1,6 @@
 import asyncio
 import errno
+from dataclasses import replace
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 import json
@@ -24,6 +25,7 @@ from PIL import Image
 from app.db.database import SessionLocal, create_db_tables, get_db_session
 from app.config import get_settings
 from app import archive, astro
+from app.repositories.archive_settings_repository import ArchiveSettingsRepository
 from app.repositories.capture_storage_settings_repository import CaptureStorageSettingsRepository
 from app.repositories.site_settings_repository import SiteSettingsRepository
 from app.repositories.node_repository import NodeRepository
@@ -189,24 +191,30 @@ async def session_housekeeping_loop():
 
 
 ARCHIVE_FIRST_RUN_DELAY_SECONDS = 60
+ARCHIVE_POLL_SECONDS = 30
 
 
 async def archive_loop():
     """Copy new frames to the archive and free space from verified copies.
 
-    Runs in a thread: hashing a night of full-resolution frames is seconds of CPU,
-    and doing it on the event loop would stall every request - the login included.
+    Polls the saved settings, so switching the archive on or changing its interval
+    in the UI takes effect without a restart. The work itself runs in a thread:
+    hashing a night of full-resolution frames is seconds of CPU, and doing it on the
+    event loop would stall every request - the login included.
     """
     await asyncio.sleep(ARCHIVE_FIRST_RUN_DELAY_SECONDS)
 
     while True:
         try:
-            await asyncio.to_thread(archive.run_cycle)
+            config = await asyncio.to_thread(archive.load_config)
+
+            if archive.due(config):
+                await asyncio.to_thread(archive.run_cycle)
         except Exception as error:
             # The loop must outlive any one failure, or the archive silently stops.
             logger.warning("archive.loop.failed", error=str(error))
 
-        await asyncio.sleep(max(1, settings.archive_interval_minutes) * 60)
+        await asyncio.sleep(ARCHIVE_POLL_SECONDS)
 
 
 @asynccontextmanager
@@ -234,7 +242,7 @@ async def lifespan(app: FastAPI):
 
     watcher = asyncio.create_task(period_watch_loop())
     housekeeper = asyncio.create_task(session_housekeeping_loop())
-    archiver = asyncio.create_task(archive_loop()) if settings.archive_dir else None
+    archiver = asyncio.create_task(archive_loop())
 
     try:
         yield
@@ -242,8 +250,7 @@ async def lifespan(app: FastAPI):
         watcher.cancel()
         housekeeper.cancel()
 
-        if archiver:
-            archiver.cancel()
+        archiver.cancel()
 
         # Drains what is queued and lets each processor flush its state, but
         # deliberately leaves sessions open: a restart resumes the night from
@@ -2255,18 +2262,96 @@ async def get_capture_file(
     return capture_file_response(node_id, archive_date, period, filename, raw=raw, thumb=thumb)
 
 
+class ArchiveSettingsUpdate(BaseModel):
+    enabled: bool | None = None
+    archive_dir: str | None = None
+    interval_minutes: int | None = Field(default=None, ge=1, le=1440)
+    sources: list[str] | None = None
+    free_trigger_gb: float | None = Field(default=None, ge=0.5)
+    free_target_gb: float | None = Field(default=None, ge=1)
+    delete_after_days: int | None = Field(default=None, ge=0, le=3650)
+    require_mount: bool | None = None
+
+
+class ArchiveTestRequest(BaseModel):
+    path: str = ""
+    require_mount: bool = True
+
+
 @app.get("/api/archive/status")
 async def archive_status():
     return await asyncio.to_thread(archive.status)
 
 
+@app.get("/api/archive/settings")
+async def get_archive_settings():
+    return (await asyncio.to_thread(archive.load_config)).as_dict()
+
+
+@app.put("/api/archive/settings")
+async def update_archive_settings(
+    request: ArchiveSettingsUpdate, db: Session = Depends(get_db_session)
+):
+    repo = ArchiveSettingsRepository(db)
+    values = request.model_dump(exclude_none=True)
+
+    if "archive_dir" in values:
+        values["archive_dir"] = values["archive_dir"].strip() or None
+
+    if "sources" in values:
+        values["sources"] = ",".join(archive.parse_sources(values["sources"]))
+
+        if not values["sources"]:
+            raise HTTPException(status_code=422, detail="Pick at least one thing to archive.")
+
+    current = archive.config_from_row(repo.get_or_create())
+    changes = dict(values)
+
+    if "archive_dir" in changes:
+        changes["archive_dir"] = Path(changes["archive_dir"]) if changes["archive_dir"] else None
+
+    if "sources" in changes:
+        changes["sources"] = archive.parse_sources(changes["sources"])
+
+    merged = replace(current, **changes)
+
+    if merged.free_target_gb <= merged.free_trigger_gb:
+        raise HTTPException(
+            status_code=422,
+            detail="The free-space target has to be higher than the trigger.",
+        )
+
+    if merged.enabled:
+        problem = await asyncio.to_thread(archive.archive_problem, merged)
+
+        if problem:
+            raise HTTPException(status_code=422, detail=problem)
+
+    row = repo.update(values)
+    logger.info("archive.settings.updated", **archive.config_from_row(row).as_dict())
+
+    return archive.config_from_row(row).as_dict()
+
+
+@app.post("/api/archive/test")
+async def test_archive_destination(request: ArchiveTestRequest):
+    return await asyncio.to_thread(archive.test_destination, request.path, request.require_mount)
+
+
+@app.get("/api/archive/mounts")
+async def archive_mounts():
+    return {"mounts": await asyncio.to_thread(archive.mount_candidates)}
+
+
 @app.post("/api/archive/run")
 async def archive_run_now():
     """Start a copy-and-cleanup pass now instead of waiting for the next interval."""
-    if settings.archive_dir is None:
-        raise HTTPException(status_code=409, detail="No archive_dir is configured.")
+    config = await asyncio.to_thread(archive.load_config)
 
-    return await asyncio.to_thread(archive.run_cycle)
+    if config.archive_dir is None:
+        raise HTTPException(status_code=409, detail="No archive folder is set.")
+
+    return await asyncio.to_thread(archive.run_cycle, True)
 
 
 @app.post("/api/captures/upload")

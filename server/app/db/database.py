@@ -189,4 +189,4 @@ def get_db_session():
     finally:
         db.close()
 
-from app.models import admin_account, admin_session, archived_file,capture_storage_settings, derived_product, node, node_camera_settings, node_capture_state, node_device_settings, node_environment, node_heater_state, node_overlay_settings, overlay_preset, processing_session, processing_settings, retention_policy, site_settings, trusted_device  # noqa: F401
+from app.models import admin_account, admin_session, archive_settings, archived_file, capture_storage_settings, derived_product, node, node_camera_settings, node_capture_state, node_device_settings, node_environment, node_heater_state, node_overlay_settings, overlay_preset, processing_session, processing_settings, retention_policy, site_settings, trusted_device  # noqa: F401

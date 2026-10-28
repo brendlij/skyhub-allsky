@@ -2,7 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import AccessControls from "../components/AccessControls.vue";
-import ArchiveStatus from "../components/ArchiveStatus.vue";
+import ArchiveControls from "../components/ArchiveControls.vue";
 import ColourControls from "../components/ColourControls.vue";
 import ProcessingControls from "../components/ProcessingControls.vue";
 import SecurityControls from "../components/SecurityControls.vue";
@@ -28,13 +28,13 @@ const {
  * the top bar; the rest are about the server and the account and stay reachable
  * with no node at all. */
 const TABS = [
-  { id: "camera", label: "Camera", icon: "📷", node: true },
-  { id: "image", label: "Image", icon: "🎭", node: true },
-  { id: "hardware", label: "Hardware", icon: "🔌", node: true },
-  { id: "storage", label: "Storage", icon: "💾" },
-  { id: "processing", label: "Processing", icon: "🎞" },
-  { id: "site", label: "Site", icon: "📍" },
-  { id: "security", label: "Security", icon: "🔒" }
+  { id: "camera", label: "Camera", node: true },
+  { id: "image", label: "Image", node: true },
+  { id: "hardware", label: "Hardware", node: true },
+  { id: "storage", label: "Storage" },
+  { id: "processing", label: "Processing" },
+  { id: "site", label: "Site" },
+  { id: "security", label: "Security" }
 ];
 
 const TAB_STORAGE_KEY = "skyhub.settings.tab";
@@ -68,8 +68,8 @@ function selectTab(id) {
 }
 
 const PERIODS = [
-  { id: "night", label: "Night", icon: "🌙" },
-  { id: "day", label: "Day", icon: "☀️" }
+  { id: "night", label: "Night" },
+  { id: "day", label: "Day" }
 ];
 
 /* The node reports the period of its last frame, which is the profile actually
@@ -210,7 +210,7 @@ const STORAGE_KEYS = [
 </script>
 
 <template>
-  <div class="stack-lg">
+  <div class="stack-lg settings-page">
     <div class="page-head">
       <div class="page-head-text">
         <h1>Settings</h1>
@@ -229,58 +229,51 @@ const STORAGE_KEYS = [
         :aria-selected="activeTab === tab.id"
         @click="selectTab(tab.id)"
       >
-        <span class="settings-tab-icon" aria-hidden="true">{{ tab.icon }}</span>
         <span class="settings-tab-label">{{ tab.label }}</span>
         <span v-if="dirtyTabs[tab.id]" class="settings-tab-dirty" title="Unsaved changes" />
       </button>
     </nav>
 
     <div v-if="activeTabNeedsNode && !settings" class="panel">
-      <EmptyState icon="⚙" title="No node selected" message="Pick a node in the top bar to edit its settings." />
+      <EmptyState icon="" title="No node selected" message="Pick a node in the top bar to edit its settings." />
     </div>
 
     <template v-else-if="activeTab === 'camera'">
-      <section class="panel">
-        <div class="panel-header">
-          <h2>
-            Camera
-            <span v-if="cameraDirty" class="badge warning">unsaved</span>
-          </h2>
-        </div>
-
-        <div class="panel-body">
-          <div class="field-grid">
-            <label class="field">
-              <span>Day interval <em class="field-unit">seconds</em></span>
-              <input v-model.number="settings.day_interval_seconds" type="number" min="1" />
-            </label>
-            <label class="field">
-              <span>Night interval <em class="field-unit">seconds</em></span>
-              <input v-model.number="settings.night_interval_seconds" type="number" min="1" />
-            </label>
-            <label class="field">
-              <span>Format</span>
-              <select v-model="settings.format">
-                <option value="jpg">jpg</option>
-                <option value="png">png</option>
-              </select>
-            </label>
+      <div class="settings-cols">
+        <section class="panel">
+          <div class="panel-header"><h2>Timing</h2></div>
+          <div class="panel-body">
+            <div class="field-grid">
+              <label class="field">
+                <span>Day interval <em class="field-unit">seconds</em></span>
+                <input v-model.number="settings.day_interval_seconds" type="number" min="1" />
+              </label>
+              <label class="field">
+                <span>Night interval <em class="field-unit">seconds</em></span>
+                <input v-model.number="settings.night_interval_seconds" type="number" min="1" />
+              </label>
+              <label class="field">
+                <span>Format</span>
+                <select v-model="settings.format">
+                  <option value="jpg">jpg</option>
+                  <option value="png">png</option>
+                </select>
+              </label>
+            </div>
             <p class="field-hint">
-              The current active interval is {{ activePeriod === 'day' ? settings.day_interval_seconds : settings.night_interval_seconds }}s.
+              The active interval right now is
+              {{ activePeriod === 'day' ? settings.day_interval_seconds : settings.night_interval_seconds }}s.
             </p>
           </div>
+        </section>
 
-          <div class="section">
-            <div class="section-title">Resolution</div>
+        <section class="panel">
+          <div class="panel-header"><h2>Resolution</h2></div>
+          <div class="panel-body">
             <label class="check">
               <input v-model="settings.full_resolution" type="checkbox" />
               Full sensor resolution
             </label>
-            <p class="field-hint">
-              {{ settings.full_resolution
-                ? "Captures at the sensor's native size — full field of view, largest files."
-                : "Captures at the size below. The node raises the height if the ratio would crop the sensor." }}
-            </p>
             <div class="field-grid">
               <label class="field">
                 <span>Width</span>
@@ -291,121 +284,109 @@ const STORAGE_KEYS = [
                 <input v-model.number="settings.height" type="number" min="1" :disabled="settings.full_resolution" />
               </label>
             </div>
-          </div>
-
-          <div class="section">
-            <div class="section-title">Exposure &amp; colour</div>
-            <div class="period-switch" role="tablist" aria-label="Exposure and colour period">
-              <button
-                v-for="option in PERIODS"
-                :key="option.id"
-                type="button"
-                role="tab"
-                :aria-selected="activePeriod === option.id"
-                class="period-tab"
-                :class="{ active: activePeriod === option.id }"
-                @click="selectPeriod(option.id)"
-              >
-                <span class="period-tab-icon" aria-hidden="true">{{ option.icon }}</span>
-                <span class="period-tab-label">{{ option.label }}</span>
-                <span v-if="livePeriod === option.id" class="period-tab-now">now</span>
-              </button>
-            </div>
-
             <p class="field-hint">
-              <template v-if="!livePeriod">
-                Editing the {{ activePeriod }} profile.
-              </template>
-              <template v-else-if="livePeriod === activePeriod">
-                Editing the {{ activePeriod }} profile — the one the node is using right now.
-              </template>
-              <template v-else>
-                The node is on {{ livePeriod }} right now, so these {{ activePeriod }} values
-                take effect at the next {{ activePeriod === 'day' ? 'sunrise' : 'sunset' }}.
-              </template>
+              {{ settings.full_resolution
+                ? "Native sensor size: full field of view, largest files."
+                : "The node raises the height if the ratio would crop the sensor." }}
             </p>
+          </div>
+        </section>
+      </div>
 
-            <div class="period-card">
-              <div class="field-grid">
-                <label class="check">
-                  <input v-model="settings[`${activePeriod}_auto_exposure`]" type="checkbox" />
-                  Auto exposure
-                </label>
-                <label class="field">
-                  <span>
-                    Exposure <em class="field-unit">ms</em>
-                    <em class="field-value">{{ asSeconds(settings[`${activePeriod}_exposure_ms`]) }}</em>
-                  </span>
-                  <input
-                    v-model.number="settings[`${activePeriod}_exposure_ms`]"
-                    type="number"
-                    min="1"
-                    :disabled="settings[`${activePeriod}_auto_exposure`]"
-                  />
-                </label>
-                <label class="field">
-                  <span>
-                    Max exposure <em class="field-unit">ms</em>
-                    <em class="field-value">{{ asSeconds(settings[`${activePeriod}_max_exposure_ms`]) }}</em>
-                  </span>
-                  <input
-                    v-model.number="settings[`${activePeriod}_max_exposure_ms`]"
-                    type="number"
-                    min="1"
-                    :disabled="!settings[`${activePeriod}_auto_exposure`]"
-                  />
-                </label>
-                <label class="check">
-                  <input v-model="settings[`${activePeriod}_auto_gain`]" type="checkbox" />
-                  Auto gain
-                </label>
-                <label class="field">
-                  <span>Gain</span>
-                  <input
-                    v-model.number="settings[`${activePeriod}_gain`]"
-                    type="number"
-                    step="0.1"
-                    min="0"
-                    :disabled="settings[`${activePeriod}_auto_gain`]"
-                  />
-                </label>
-                <label class="field">
-                  <span>Max gain</span>
-                  <input
-                    v-model.number="settings[`${activePeriod}_max_gain`]"
-                    type="number"
-                    step="0.1"
-                    min="1"
-                    :disabled="!settings[`${activePeriod}_auto_gain`]"
-                  />
-                </label>
-              </div>
-
-              <p v-if="cadenceWarning" class="callout warning">
-                {{ cadenceWarning }}
-              </p>
-
-              <p class="field-hint">
-                Exposure and gain are only handed to the auto controller when the box above
-                is ticked; otherwise the node uses exactly the values set here. The maximums
-                bound the controller and are ignored in manual mode.
-              </p>
-
-              <ColourControls :settings="settings" :period="activePeriod" />
-            </div>
+      <section class="panel">
+        <div class="panel-header">
+          <h2>
+            Profile
+            <span v-if="cameraDirty" class="badge warning">unsaved</span>
+          </h2>
+          <div class="period-switch" role="tablist" aria-label="Exposure and colour period">
+            <button
+              v-for="option in PERIODS"
+              :key="option.id"
+              type="button"
+              role="tab"
+              :aria-selected="activePeriod === option.id"
+              class="period-tab"
+              :class="{ active: activePeriod === option.id }"
+              @click="selectPeriod(option.id)"
+            >
+              <span class="period-tab-label">{{ option.label }}</span>
+              <span v-if="livePeriod === option.id" class="period-tab-now">now</span>
+            </button>
           </div>
         </div>
 
-        <div class="panel-footer">
-          <span class="muted grow">
-            <template v-if="cameraDirty">Unsaved changes · </template>{{ applyHint }}
-          </span>
-          <button type="button" class="primary" :disabled="!cameraDirty || busy.settings" @click="saveSettings">
-            {{ busy.settings ? "Saving…" : "Save camera settings" }}
-          </button>
+        <div class="panel-body">
+          <p class="field-hint">
+            <template v-if="!livePeriod">Editing the {{ activePeriod }} profile.</template>
+            <template v-else-if="livePeriod === activePeriod">
+              Editing the {{ activePeriod }} profile, the one the node is using right now.
+            </template>
+            <template v-else>
+              The node is on {{ livePeriod }} right now, so these {{ activePeriod }} values
+              take effect at the next {{ activePeriod === 'day' ? 'sunrise' : 'sunset' }}.
+            </template>
+          </p>
+
+          <div class="profile-cols">
+            <div class="profile-group">
+              <div class="section-title">Exposure</div>
+
+              <label class="check">
+                <input v-model="settings[`${activePeriod}_auto_exposure`]" type="checkbox" />
+                Auto exposure
+              </label>
+
+              <label v-if="settings[`${activePeriod}_auto_exposure`]" class="field">
+                <span>
+                  Max exposure <em class="field-unit">ms</em>
+                  <em class="field-value">{{ asSeconds(settings[`${activePeriod}_max_exposure_ms`]) }}</em>
+                </span>
+                <input v-model.number="settings[`${activePeriod}_max_exposure_ms`]" type="number" min="1" />
+              </label>
+              <label v-else class="field">
+                <span>
+                  Exposure <em class="field-unit">ms</em>
+                  <em class="field-value">{{ asSeconds(settings[`${activePeriod}_exposure_ms`]) }}</em>
+                </span>
+                <input v-model.number="settings[`${activePeriod}_exposure_ms`]" type="number" min="1" />
+              </label>
+
+              <label class="check">
+                <input v-model="settings[`${activePeriod}_auto_gain`]" type="checkbox" />
+                Auto gain
+              </label>
+
+              <label v-if="settings[`${activePeriod}_auto_gain`]" class="field">
+                <span>Max gain</span>
+                <input v-model.number="settings[`${activePeriod}_max_gain`]" type="number" step="0.1" min="1" />
+              </label>
+              <label v-else class="field">
+                <span>Gain</span>
+                <input v-model.number="settings[`${activePeriod}_gain`]" type="number" step="0.1" min="0" />
+              </label>
+
+              <p v-if="cadenceWarning" class="callout warning">{{ cadenceWarning }}</p>
+
+              <p class="field-hint">
+                With auto on, the controller picks exposure or gain on its own and the maximum
+                is its upper limit. With auto off, the node uses exactly the value set here.
+              </p>
+            </div>
+
+            <ColourControls :settings="settings" :period="activePeriod" />
+          </div>
         </div>
       </section>
 
+      <div class="settings-savebar">
+        <p>
+          <template v-if="cameraDirty">Unsaved changes. </template>{{ applyHint }}
+        </p>
+        <button type="button" class="primary" :disabled="!cameraDirty || busy.settings" @click="saveSettings">
+          {{ busy.settings ? "Saving…" : "Save camera settings" }}
+        </button>
+      </div>
     </template>
 
     <div v-else-if="activeTab === 'image'" class="settings-grid">
@@ -573,7 +554,7 @@ const STORAGE_KEYS = [
             </button>
           </div>
         </section>
-      <ArchiveStatus />
+      <ArchiveControls />
     </div>
 
     <div v-else-if="activeTab === 'processing'" class="settings-grid">
