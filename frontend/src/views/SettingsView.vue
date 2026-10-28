@@ -1,6 +1,8 @@
 <script setup>
 import { computed, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import AccessControls from "../components/AccessControls.vue";
+import ArchiveStatus from "../components/ArchiveStatus.vue";
 import ColourControls from "../components/ColourControls.vue";
 import ProcessingControls from "../components/ProcessingControls.vue";
 import SecurityControls from "../components/SecurityControls.vue";
@@ -21,6 +23,49 @@ const {
   storageSettings,
   storageStats
 } = useSkyHub();
+
+/* One tab per concern instead of one long page. Node tabs edit the node picked in
+ * the top bar; the rest are about the server and the account and stay reachable
+ * with no node at all. */
+const TABS = [
+  { id: "camera", label: "Camera", icon: "📷", node: true },
+  { id: "image", label: "Image", icon: "🎭", node: true },
+  { id: "hardware", label: "Hardware", icon: "🔌", node: true },
+  { id: "storage", label: "Storage", icon: "💾" },
+  { id: "processing", label: "Processing", icon: "🎞" },
+  { id: "site", label: "Site", icon: "📍" },
+  { id: "security", label: "Security", icon: "🔒" }
+];
+
+const TAB_STORAGE_KEY = "skyhub.settings.tab";
+const route = useRoute();
+const router = useRouter();
+
+function savedTab() {
+  try {
+    return localStorage.getItem(TAB_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+const activeTab = computed(() => {
+  const wanted = String(route.query.tab || savedTab() || "camera");
+
+  return TABS.some((tab) => tab.id === wanted) ? wanted : "camera";
+});
+
+const activeTabNeedsNode = computed(() => TABS.find((tab) => tab.id === activeTab.value)?.node);
+
+function selectTab(id) {
+  try {
+    localStorage.setItem(TAB_STORAGE_KEY, id);
+  } catch {
+    // Remembering the tab is a convenience; the URL still carries it.
+  }
+
+  router.replace({ query: { ...route.query, tab: id } });
+}
 
 const PERIODS = [
   { id: "night", label: "Night", icon: "🌙" },
@@ -58,6 +103,12 @@ watch(deviceSettings, (value) => { deviceBaseline.value = snapshot(value); }, { 
 const cameraDirty = computed(() => Boolean(settings.value) && snapshot(settings.value) !== baseline.value);
 const storageDirty = computed(() => Boolean(storageSettings.value) && snapshot(storageSettings.value) !== storageBaseline.value);
 const deviceDirty = computed(() => Boolean(deviceSettings.value) && snapshot(deviceSettings.value) !== deviceBaseline.value);
+
+const dirtyTabs = computed(() => ({
+  camera: cameraDirty.value,
+  hardware: deviceDirty.value,
+  storage: storageDirty.value
+}));
 
 /* Follow the node until the tab is picked by hand. Unsaved work pins it too, so
  * a sunset can never move the form out from under an edit in flight. */
@@ -163,15 +214,32 @@ const STORAGE_KEYS = [
     <div class="page-head">
       <div class="page-head-text">
         <h1>Settings</h1>
-        <p>Camera, colour, hardware and storage for the selected node — plus this server's location, your account and its access</p>
+        <p>Camera, hardware and storage for the selected node, plus this server's site, processing and security</p>
       </div>
     </div>
 
-    <div v-if="!settings" class="panel">
+    <nav class="settings-tabs" role="tablist" aria-label="Settings sections">
+      <button
+        v-for="tab in TABS"
+        :key="tab.id"
+        type="button"
+        role="tab"
+        class="settings-tab"
+        :class="{ active: activeTab === tab.id }"
+        :aria-selected="activeTab === tab.id"
+        @click="selectTab(tab.id)"
+      >
+        <span class="settings-tab-icon" aria-hidden="true">{{ tab.icon }}</span>
+        <span class="settings-tab-label">{{ tab.label }}</span>
+        <span v-if="dirtyTabs[tab.id]" class="settings-tab-dirty" title="Unsaved changes" />
+      </button>
+    </nav>
+
+    <div v-if="activeTabNeedsNode && !settings" class="panel">
       <EmptyState icon="⚙" title="No node selected" message="Pick a node in the top bar to edit its settings." />
     </div>
 
-    <template v-else>
+    <template v-else-if="activeTab === 'camera'">
       <section class="panel">
         <div class="panel-header">
           <h2>
@@ -338,9 +406,13 @@ const STORAGE_KEYS = [
         </div>
       </section>
 
-      <div class="settings-grid">
-        <MaskControls />
+    </template>
 
+    <div v-else-if="activeTab === 'image'" class="settings-grid">
+      <MaskControls />
+    </div>
+
+    <div v-else-if="activeTab === 'hardware'" class="settings-grid">
         <section v-if="deviceSettings" class="panel">
           <div class="panel-header">
             <h2>
@@ -368,7 +440,37 @@ const STORAGE_KEYS = [
                   <input v-model="deviceSettings.devices.heater.active_high" type="checkbox" />
                   Active high
                 </label>
+                <label class="field">
+                  <span>Mode</span>
+                  <select v-model="deviceSettings.devices.heater.mode">
+                    <option value="manual">Manual — the switch on the monitor</option>
+                    <option value="auto">Automatic — from temperature and humidity</option>
+                  </select>
+                </label>
               </div>
+
+              <template v-if="deviceSettings.devices.heater.mode === 'auto' && deviceSettings.devices.heater.auto">
+                <div class="field-grid">
+                  <label class="field">
+                    <span>Turn on at <em class="field-unit">°C above dew point</em></span>
+                    <input v-model.number="deviceSettings.devices.heater.auto.on_margin_c" type="number" min="0" step="0.5" />
+                  </label>
+                  <label class="field">
+                    <span>Turn off at <em class="field-unit">°C above dew point</em></span>
+                    <input v-model.number="deviceSettings.devices.heater.auto.off_margin_c" type="number" min="0.5" step="0.5" />
+                  </label>
+                  <label class="field">
+                    <span>Minimum switch time <em class="field-unit">seconds</em></span>
+                    <input v-model.number="deviceSettings.devices.heater.auto.min_switch_seconds" type="number" min="0" />
+                  </label>
+                </div>
+                <p class="field-hint">
+                  The node switches the heater itself, so it keeps working while the server is
+                  away. It turns on when the air is within the first margin of its dew point and
+                  stays on until the second is reached. If the sensor stops reporting for 15
+                  minutes the heater is switched off. The manual switch is ignored in this mode.
+                </p>
+              </template>
             </div>
 
             <div class="section">
@@ -404,6 +506,9 @@ const STORAGE_KEYS = [
           </div>
         </section>
 
+    </div>
+
+    <div v-else-if="activeTab === 'storage'" class="settings-grid">
         <section v-if="storageSettings" class="panel">
           <div class="panel-header">
             <h2>
@@ -468,15 +573,18 @@ const STORAGE_KEYS = [
             </button>
           </div>
         </section>
-      </div>
-    </template>
+      <ArchiveStatus />
+    </div>
 
-    <!-- Outside the node branch: these are about the server and the account, not
-         about whichever camera happens to be selected, and they have to stay
-         reachable when there are no nodes at all. -->
-    <div class="settings-grid">
-      <SiteControls />
+    <div v-else-if="activeTab === 'processing'" class="settings-grid">
       <ProcessingControls />
+    </div>
+
+    <div v-else-if="activeTab === 'site'" class="settings-grid">
+      <SiteControls />
+    </div>
+
+    <div v-else-if="activeTab === 'security'" class="settings-grid">
       <SecurityControls />
       <AccessControls />
     </div>

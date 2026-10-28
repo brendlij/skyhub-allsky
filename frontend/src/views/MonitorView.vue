@@ -13,6 +13,7 @@ import { useViewport } from "../composables/useViewport";
 
 const {
   busy,
+  deviceSettings,
   environmentTelemetry,
   heaterState,
   latest,
@@ -75,6 +76,9 @@ const dewRisk = computed(() => {
 });
 
 const dewTone = computed(() => (dewRisk.value !== null && dewRisk.value < 2 ? "warning" : ""));
+
+// In automatic mode the node owns the relay and ignores the manual switch.
+const heaterAuto = computed(() => deviceSettings.value?.devices?.heater?.mode === "auto");
 
 const heater = computed(() => {
   const state = heaterState.value;
@@ -150,10 +154,11 @@ const environmentMetrics = computed(() => [
 ].filter(Boolean));
 
 const heaterMetrics = computed(() => [
+  heaterAuto.value ? metric("Mode", "Automatic", { tone: "success" }) : null,
   metric("State", heater.value ? (heater.value.on ? "On" : "Off") : "Unknown", {
     tone: heater.value?.on ? "success" : "faint"
   }),
-  heater.value?.pending ? { label: "Pending", value: `Desired ${heater.value.desired}`, tone: "warning" } : null,
+  !heaterAuto.value && heater.value?.pending ? { label: "Pending", value: `Desired ${heater.value.desired}`, tone: "warning" } : null,
   metric("Output", heater.value?.output, { mono: true })
 ].filter(Boolean));
 
@@ -197,7 +202,7 @@ const environmentSummary = computed(() => environment.value?.temperature || "No 
           <ToggleSwitch
             :model-value="Boolean(heaterState?.desired_enabled)"
             label="Heater"
-            :disabled="!selectedNode"
+            :disabled="!selectedNode || heaterAuto"
             :busy="busy.heater"
             @update:model-value="setHeaterEnabled($event)"
           />
@@ -342,10 +347,10 @@ const environmentSummary = computed(() => environment.value?.temperature || "No 
             <button
               type="button"
               class="sm"
-              :disabled="!selectedNode || busy.heater"
+              :disabled="!selectedNode || busy.heater || heaterAuto"
               @click="setHeaterEnabled(!heaterState?.desired_enabled)"
             >
-              {{ heaterState?.desired_enabled ? "Turn off" : "Turn on" }}
+              {{ heaterAuto ? "Automatic" : heaterState?.desired_enabled ? "Turn off" : "Turn on" }}
             </button>
           </div>
           <p v-if="!heater" class="rail-empty">No heater state yet.</p>

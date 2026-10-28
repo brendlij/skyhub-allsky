@@ -799,3 +799,58 @@ textarea.invalid {
     max-height: 220px;
   }
 }
+
+/* ---- settings tabs ---- */
+
+.settings-tabs {
+  display: flex;
+  gap: var(--space-1);
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  scrollbar-width: none;
+}
+
+.settings-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.settings-tab {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  padding: 0 var(--space-3);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: color var(--transition), border-color var(--transition);
+}
+
+.settings-tab:hover:not(.active) {
+  color: var(--text);
+}
+
+.settings-tab.active {
+  border-bottom-color: var(--accent);
+  color: var(--text);
+}
+
+.settings-tab-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+/* Unsaved work on a tab you are not looking at. */
+.settings-tab-dirty {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--warning);
+}

@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.config import get_settings
@@ -9,10 +9,37 @@ settings.data_dir.mkdir(parents=True, exist_ok=True)
 
 DATABASE_URL = f"sqlite:///{settings.database_path.as_posix()}"
 
+SQLITE_BUSY_TIMEOUT_SECONDS = 15
+
 engine = create_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False},
+    connect_args={
+        "check_same_thread": False,
+        "timeout": SQLITE_BUSY_TIMEOUT_SECONDS,
+    },
+    pool_pre_ping=True,
 )
+
+
+@event.listens_for(engine, "connect")
+def configure_sqlite_connection(dbapi_connection, _record) -> None:
+    """Let readers and writers coexist instead of failing with "database is locked".
+
+    Frame uploads, the processing worker threads, the node websockets and the login
+    route all write to the same file. In the default rollback-journal mode a writer
+    blocks every reader and a second writer fails after the busy timeout, which
+    surfaces as a 500 on whatever request lost the race - including the sign-in.
+    WAL lets reads proceed during a write, and busy_timeout makes a second writer
+    wait its turn rather than give up.
+    """
+    cursor = dbapi_connection.cursor()
+
+    try:
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_SECONDS * 1000}")
+    finally:
+        cursor.close()
 
 SessionLocal = sessionmaker(
     bind=engine,
@@ -162,4 +189,4 @@ def get_db_session():
     finally:
         db.close()
 
-from app.models import admin_account, admin_session, capture_storage_settings, derived_product, node, node_camera_settings, node_capture_state, node_device_settings, node_environment, node_heater_state, node_overlay_settings, overlay_preset, processing_session, processing_settings, retention_policy, site_settings, trusted_device  # noqa: F401
+from app.models import admin_account, admin_session, archived_file,capture_storage_settings, derived_product, node, node_camera_settings, node_capture_state, node_device_settings, node_environment, node_heater_state, node_overlay_settings, overlay_preset, processing_session, processing_settings, retention_policy, site_settings, trusted_device  # noqa: F401

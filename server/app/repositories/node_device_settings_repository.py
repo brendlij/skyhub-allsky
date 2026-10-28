@@ -23,7 +23,14 @@ def default_devices() -> dict[str, Any]:
             "driver": "gpiozero",
             "gpio_pin": 23,
             "active_high": True,
+            # "manual": the heater follows the switch in the UI. "auto": the node
+            # switches it from the dew point spread (temperature minus dew point).
             "mode": "manual",
+            "auto": {
+                "on_margin_c": 3.0,
+                "off_margin_c": 5.0,
+                "min_switch_seconds": 120,
+            },
             "pwm": {
                 "enabled": False,
                 "duty_cycle": 1.0,

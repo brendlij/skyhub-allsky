@@ -19,6 +19,13 @@ class NodeSettings(BaseSettings):
     reconnect_initial_delay_seconds: float = 1
     reconnect_max_delay_seconds: float = 30
     captures_dir: Path = NODE_DIR / "data" / "captures"
+    # Capture pauses below the first value and resumes above the second. 0 turns
+    # the guard off.
+    min_free_disk_gb: float = 5.0
+    resume_free_disk_gb: float = 8.0
+    # Off by default: once the server has a frame the local copy is a duplicate,
+    # and on a single-Pi install it is a second copy on the same card.
+    keep_local_captures: bool = False
     environment_sensor_driver: str = "mock"
     environment_interval_seconds: int = 30
     bme280_i2c_bus: int = 1

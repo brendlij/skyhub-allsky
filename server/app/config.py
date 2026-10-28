@@ -59,6 +59,30 @@ class ServerSettings(BaseSettings):
     # Post-processing. The queue is bounded because a processor that falls behind
     # must cost frames, not memory - on a Pi, an unbounded backlog of decoded
     # images is an out-of-memory kill that takes the capture down with it.
+    # Hard floor for uploads: below this many GB free the server refuses new frames
+    # with 507 instead of writing into a disk SQLite also needs. Kept under the
+    # node's own pause threshold so the node normally stops first. 0 turns it off.
+    min_free_disk_gb: float = 3.0
+
+    # Archive to a second disk or a mounted network share (NAS). Empty disables it.
+    # Frames are copied, read back and hash-checked before anything local is ever
+    # deleted. See docs/ARCHIVE.md for mounting a share.
+    archive_dir: Path | None = None
+    archive_interval_minutes: int = 10
+    # Which trees are copied. Only captures and originals are ever deleted locally;
+    # derived products are referenced by database rows, so they are copied only.
+    archive_sources: str = "originals,captures,derived"
+    # Local copies are removed, oldest day first, once free space drops below the
+    # trigger, until it is back above the target. Only verified files, never today's.
+    archive_free_trigger_gb: float = 15.0
+    archive_free_target_gb: float = 25.0
+    # Also remove verified local copies older than this many days. 0 = only when
+    # space is low.
+    archive_delete_after_days: int = 0
+    # Refuse an archive that lives on the same filesystem as the data directory.
+    # An unmounted share is just an empty folder on the SD card: copying into it
+    # fills the card and then looks like a successful backup.
+    archive_require_mount: bool = True
     processing_enabled: bool = True
     processing_queue_size: int = 64
     # Where ffmpeg lives, when it is not on PATH. Empty means "look it up".

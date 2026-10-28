@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -13,13 +14,22 @@ from app.camera.factory import create_camera
 from app.config import get_settings
 from app.environment.base import EnvironmentSensor
 from app.environment.factory import create_environment_sensor
+from app.heater.auto import AutoHeaterConfig, DewHeaterLogic, spread_celsius
 from app.heater.base import HeaterController, HeaterState
 from app.heater.factory import create_heater_controller
+from app.storage.guard import DiskGuard
 from app.storage.paths import CAPTURES_DIR
 
 
 logger = structlog.get_logger()
 node_settings = get_settings()
+MAX_CONSECUTIVE_CAPTURE_FAILURES = 8
+dew_logic = DewHeaterLogic(started_at=time.monotonic())
+disk_guard = DiskGuard(
+    CAPTURES_DIR,
+    stop_below_gb=node_settings.min_free_disk_gb,
+    resume_above_gb=node_settings.resume_free_disk_gb,
+)
 
 camera: CameraDevice = create_camera(node_settings.camera_driver)
 environment_sensor: EnvironmentSensor | None = None
@@ -196,6 +206,73 @@ async def send_heater_state(websocket, state: HeaterState | None = None):
     )
 
 
+def heater_mode() -> str:
+    return str(active_device_config.get("heater", {}).get("mode", "manual")).lower()
+
+
+def dew_heater_config() -> AutoHeaterConfig:
+    return AutoHeaterConfig.from_dict(active_device_config.get("heater", {}).get("auto"))
+
+
+async def apply_dew_heater(websocket, payload: dict[str, Any]) -> None:
+    """In auto mode, switch the heater from the latest temperature and humidity."""
+    global heater
+
+    if heater_mode() != "auto":
+        return
+
+    temperature_c = payload.get("temperature_c")
+    humidity_percent = payload.get("humidity_percent")
+
+    if temperature_c is None or humidity_percent is None:
+        return
+
+    if heater is None:
+        heater = initialize_heater()
+
+    if heater is None:
+        return
+
+    state = heater.get_state()
+    wanted = dew_logic.decide(
+        dew_heater_config(),
+        time.monotonic(),
+        state.enabled,
+        float(temperature_c),
+        float(humidity_percent),
+    )
+
+    if wanted == state.enabled:
+        return
+
+    state = heater.set_enabled(wanted)
+    logger.info(
+        "heater.auto.switched",
+        enabled=state.enabled,
+        temperature_c=temperature_c,
+        humidity_percent=humidity_percent,
+        spread_c=round(spread_celsius(float(temperature_c), float(humidity_percent)), 1),
+    )
+    await send_heater_state(websocket, state)
+
+
+async def heater_fail_safe(websocket) -> None:
+    """Auto mode without a working sensor: stop heating rather than heat blind."""
+    if heater_mode() != "auto" or heater is None:
+        return
+
+    try:
+        state = heater.get_state()
+
+        if state.enabled and dew_logic.is_stale(dew_heater_config(), time.monotonic()):
+            state = heater.set_enabled(False)
+            logger.warning("heater.auto.sensor_stale.off")
+            await send_heater_state(websocket, state)
+    except Exception as error:
+        logger.warning("heater.auto.fail_safe_failed", error=str(error))
+
+
+
 async def heartbeat_loop(websocket):
     while True:
         message = {
@@ -253,6 +330,8 @@ async def environment_loop(websocket):
                 humidity_percent=payload["humidity_percent"],
             )
 
+            await apply_dew_heater(websocket, payload)
+
         except asyncio.CancelledError:
             raise
 
@@ -263,6 +342,7 @@ async def environment_loop(websocket):
                 error=str(error),
             )
             environment_sensor = None
+            await heater_fail_safe(websocket)
 
         await asyncio.sleep(max(1, settings.environment_interval_seconds))
 
@@ -289,6 +369,8 @@ async def capture_sequence_loop(websocket, sequence_id: str, sequence_overrides:
         or bool(capture_settings.get("auto_gain", False))
     )
     next_capture_at = asyncio.get_running_loop().time()
+    disk_pause_reported = False
+    consecutive_capture_failures = 0
 
     logger.info(
         "sequence.loop.started",
@@ -322,6 +404,50 @@ async def capture_sequence_loop(websocket, sequence_id: str, sequence_overrides:
                     max_gain=capture_settings.get("max_gain"),
                 )
 
+            disk_paused, disk_free_gb = disk_guard.check()
+
+            if disk_paused:
+                # Skip the frame rather than risk filling the disk. Reported once per
+                # pause, not per frame, so a long pause does not flood the log.
+                if not disk_pause_reported:
+                    disk_pause_reported = True
+                    logger.error(
+                        "capture.paused.disk_low",
+                        sequence_id=sequence_id,
+                        free_gb=round(disk_free_gb, 2),
+                        resume_above_gb=disk_guard.resume_above_gb,
+                    )
+                    await send_json(
+                        websocket,
+                        {
+                            "type": "capture.paused",
+                            "node_id": node_settings.node_id,
+                            "sequence_id": sequence_id,
+                            "reason": "disk_low",
+                            "free_gb": round(disk_free_gb, 2),
+                        },
+                    )
+
+                next_capture_at = asyncio.get_running_loop().time() + max(interval_seconds, 30)
+                continue
+
+            if disk_pause_reported:
+                disk_pause_reported = False
+                logger.warning(
+                    "capture.resumed.disk_ok",
+                    sequence_id=sequence_id,
+                    free_gb=round(disk_free_gb, 2),
+                )
+                await send_json(
+                    websocket,
+                    {
+                        "type": "capture.resumed",
+                        "node_id": node_settings.node_id,
+                        "sequence_id": sequence_id,
+                        "free_gb": round(disk_free_gb, 2),
+                    },
+                )
+
             capture_started_at = asyncio.get_running_loop().time()
             active_interval_seconds = (
                 startup_interval_seconds
@@ -339,7 +465,31 @@ async def capture_sequence_loop(websocket, sequence_id: str, sequence_overrides:
                 },
             )
 
-            capture_result = await camera.capture(settings=capture_settings, output_dir=CAPTURES_DIR)
+            try:
+                capture_result = await camera.capture(settings=capture_settings, output_dir=CAPTURES_DIR)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                # One bad frame (a full disk, a camera hiccup) must not end the
+                # sequence. Back off and try again; only a run of failures is
+                # treated as a dead camera and surfaced as sequence.failed.
+                consecutive_capture_failures += 1
+                logger.warning(
+                    "capture.failed",
+                    sequence_id=sequence_id,
+                    attempt=consecutive_capture_failures,
+                    error=str(error),
+                )
+
+                if consecutive_capture_failures >= MAX_CONSECUTIVE_CAPTURE_FAILURES:
+                    raise
+
+                next_capture_at = asyncio.get_running_loop().time() + min(
+                    300, 5 * 2**consecutive_capture_failures
+                )
+                continue
+
+            consecutive_capture_failures = 0
 
             logger.info(
                 "capture.saved.local",
@@ -364,10 +514,22 @@ async def capture_sequence_loop(websocket, sequence_id: str, sequence_overrides:
                 },
             )
 
-            upload_result = await upload_capture(
-                sequence_id=sequence_id,
-                capture_result=capture_result,
-            )
+            try:
+                upload_result = await upload_capture(
+                    sequence_id=sequence_id,
+                    capture_result=capture_result,
+                )
+            except httpx.HTTPError as error:
+                # A server that is down, restarting or out of space must cost this
+                # frame's upload, not the whole sequence. The file stays on disk
+                # and the next frame tries again; the disk guard bounds the pile.
+                logger.warning(
+                    "capture.upload.failed",
+                    sequence_id=sequence_id,
+                    path=str(capture_result.file_path),
+                    error=str(error),
+                )
+                continue
 
             capture_metadata = capture_result.metadata or {}
 
@@ -423,6 +585,10 @@ async def capture_sequence_loop(websocket, sequence_id: str, sequence_overrides:
                     },
                 )
                 continue
+
+            if not node_settings.keep_local_captures:
+                with suppress(FileNotFoundError):
+                    Path(capture_result.file_path).unlink()
 
             logger.info(
                 "capture.uploaded",
@@ -665,6 +831,7 @@ async def receive_loop(websocket):
             active_device_config = (message.get("settings", {}) or {}).get("devices", {}) or {}
             reinitialize_environment_sensor()
             reinitialize_heater()
+            dew_logic.reset(time.monotonic())
             logger.info("device.config.updated", devices=active_device_config)
             await send_json(
                 websocket,
@@ -684,6 +851,13 @@ async def receive_loop(websocket):
 
             if heater is None:
                 await send_heater_state(websocket, None)
+                continue
+
+            if heater_mode() == "auto":
+                # The automation owns the relay. Report what it is doing so the UI
+                # snaps back, rather than letting two controllers fight over it.
+                logger.info("heater.set.ignored", reason="auto mode")
+                await send_heater_state(websocket, heater.get_state())
                 continue
 
             state = heater.set_enabled(requested_enabled)

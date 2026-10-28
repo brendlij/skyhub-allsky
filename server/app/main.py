@@ -1,4 +1,5 @@
 import asyncio
+import errno
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 import json
@@ -15,13 +16,14 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Upload
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 import structlog
 from PIL import Image
 
 from app.db.database import SessionLocal, create_db_tables, get_db_session
 from app.config import get_settings
-from app import astro
+from app import archive, astro
 from app.repositories.capture_storage_settings_repository import CaptureStorageSettingsRepository
 from app.repositories.site_settings_repository import SiteSettingsRepository
 from app.repositories.node_repository import NodeRepository
@@ -186,6 +188,27 @@ async def session_housekeeping_loop():
             logger.warning("processing.retention_failed", error=str(error))
 
 
+ARCHIVE_FIRST_RUN_DELAY_SECONDS = 60
+
+
+async def archive_loop():
+    """Copy new frames to the archive and free space from verified copies.
+
+    Runs in a thread: hashing a night of full-resolution frames is seconds of CPU,
+    and doing it on the event loop would stall every request - the login included.
+    """
+    await asyncio.sleep(ARCHIVE_FIRST_RUN_DELAY_SECONDS)
+
+    while True:
+        try:
+            await asyncio.to_thread(archive.run_cycle)
+        except Exception as error:
+            # The loop must outlive any one failure, or the archive silently stops.
+            logger.warning("archive.loop.failed", error=str(error))
+
+        await asyncio.sleep(max(1, settings.archive_interval_minutes) * 60)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     create_db_tables()
@@ -211,12 +234,17 @@ async def lifespan(app: FastAPI):
 
     watcher = asyncio.create_task(period_watch_loop())
     housekeeper = asyncio.create_task(session_housekeeping_loop())
+    archiver = asyncio.create_task(archive_loop()) if settings.archive_dir else None
 
     try:
         yield
     finally:
         watcher.cancel()
         housekeeper.cancel()
+
+        if archiver:
+            archiver.cancel()
+
         # Drains what is queued and lets each processor flush its state, but
         # deliberately leaves sessions open: a restart resumes the night from
         # disk rather than encoding half of it.
@@ -228,6 +256,34 @@ app = FastAPI(
     version=settings.app_version,
     lifespan=lifespan,
 )
+
+
+@app.exception_handler(OperationalError)
+async def database_unavailable_handler(request: Request, error: OperationalError):
+    """A locked or full database is a temporary condition, not a server bug.
+
+    Answered as 503 with a reason the UI can show, instead of a bare "Internal
+    Server Error" on whatever request happened to lose - the sign-in included.
+    """
+    logger.error("database.unavailable", path=request.url.path, error=str(error.orig))
+
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "The database is busy or the disk is full. Try again in a moment."},
+        headers={"Retry-After": "5"},
+    )
+
+
+@app.exception_handler(OSError)
+async def disk_error_handler(request: Request, error: OSError):
+    if error.errno == errno.ENOSPC:
+        logger.error("disk.full", path=request.url.path)
+
+        return JSONResponse(status_code=507, content={"detail": "Server storage is full."})
+
+    logger.exception("request.os_error", path=request.url.path, error=str(error))
+
+    return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
 
 def origin_is_same_site(request: Request) -> bool:
@@ -1455,6 +1511,11 @@ def capture_storage_bytes() -> int:
 
 
 def enforce_capture_retention(storage_settings, protected_paths: set[Path] | None = None) -> dict:
+    # Called on every upload. With no policy it used to walk the whole capture tree
+    # first - tens of thousands of stat calls on the event loop for nothing.
+    if not storage_settings.retention_days and not storage_settings.max_storage_gb:
+        return {"deleted_files": 0, "deleted_bytes": 0}
+
     deleted_files = 0
     deleted_bytes = 0
     protected_paths = {path.resolve() for path in protected_paths or set()}
@@ -2194,6 +2255,20 @@ async def get_capture_file(
     return capture_file_response(node_id, archive_date, period, filename, raw=raw, thumb=thumb)
 
 
+@app.get("/api/archive/status")
+async def archive_status():
+    return await asyncio.to_thread(archive.status)
+
+
+@app.post("/api/archive/run")
+async def archive_run_now():
+    """Start a copy-and-cleanup pass now instead of waiting for the next interval."""
+    if settings.archive_dir is None:
+        raise HTTPException(status_code=409, detail="No archive_dir is configured.")
+
+    return await asyncio.to_thread(archive.run_cycle)
+
+
 @app.post("/api/captures/upload")
 async def upload_capture(
     node_id: str = Form(...),
@@ -2205,6 +2280,18 @@ async def upload_capture(
     file: UploadFile = File(...),
     db: Session = Depends(get_db_session),
 ):
+    if settings.min_free_disk_gb > 0:
+        free_gb = shutil.disk_usage(settings.data_dir).free / 1024**3
+
+        if free_gb < settings.min_free_disk_gb:
+            logger.error(
+                "capture.rejected.disk_full",
+                node_id=node_id,
+                free_gb=round(free_gb, 2),
+                min_free_gb=settings.min_free_disk_gb,
+            )
+            raise HTTPException(status_code=507, detail="Server storage is full.")
+
     try:
         parsed_metadata = json.loads(metadata)
     except json.JSONDecodeError:
@@ -2266,8 +2353,14 @@ async def upload_capture(
     original_dir.mkdir(parents=True, exist_ok=True)
     thumbnail_dir.mkdir(parents=True, exist_ok=True)
 
-    with output_path.open("wb") as output_file:
-        shutil.copyfileobj(file.file, output_file)
+    try:
+        with output_path.open("wb") as output_file:
+            shutil.copyfileobj(file.file, output_file)
+    except OSError:
+        # Disk filled mid-write: do not leave a truncated frame behind to be listed
+        # as a capture.
+        output_path.unlink(missing_ok=True)
+        raise
 
     # Before the original is filed away, so the mask covers the raw copy too. It
     # is one extra encode, and only when the node actually has a mask.
@@ -2278,7 +2371,12 @@ async def upload_capture(
         # A broken mask must not cost the frame that just came off the camera.
         logger.warning("capture.mask_failed", node_id=node_id, error=str(error))
 
-    shutil.copy2(output_path, original_path)
+    try:
+        shutil.copy2(output_path, original_path)
+    except OSError:
+        output_path.unlink(missing_ok=True)
+        original_path.unlink(missing_ok=True)
+        raise
 
     overlay_settings = NodeOverlaySettingsRepository(db).get_or_create(upload_node_id)
     environment = NodeEnvironmentRepository(db).get(upload_node_id)
