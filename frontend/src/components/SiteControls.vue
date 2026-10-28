@@ -276,10 +276,9 @@ function useBrowserLocation() {
 
 <style>
 .site-map {
-  height: 260px;
+  height: clamp(340px, 55vh, 620px);
   width: 100%;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   overflow: hidden;
   /* Leaflet puts its panes above everything by default, which would float the
    * map over the sticky topbar while scrolling. */
